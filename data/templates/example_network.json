@@ -1,0 +1,56 @@
+{
+  "id": "example_network",
+  "name": "Example Network Topology",
+  "description": "A simple network topology template with router, servers, and clients",
+  "category": "network",
+  "nodes": [
+    {
+      "id": "router_{domain}",
+      "type": "Host",
+      "properties": {
+        "hostname": "router.{domain}",
+        "role": "router",
+        "os": "Linux"
+      }
+    },
+    {
+      "id": "web-server_{domain}",
+      "type": "Host",
+      "properties": {
+        "hostname": "web.{domain}",
+        "role": "web-server",
+        "os": "Ubuntu"
+      }
+    },
+    {
+      "id": "db-server_{domain}",
+      "type": "Host",
+      "properties": {
+        "hostname": "db.{domain}",
+        "role": "database",
+        "os": "CentOS"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source": "router_{domain}",
+      "target": "web-server_{domain}",
+      "type": "CONNECTS_TO",
+      "properties": {
+        "protocol": "tcp",
+        "port": 443
+      }
+    },
+    {
+      "source": "web-server_{domain}",
+      "target": "db-server_{domain}",
+      "type": "CONNECTS_TO",
+      "properties": {
+        "protocol": "tcp",
+        "port": 3306
+      }
+    }
+  ]
+}
+

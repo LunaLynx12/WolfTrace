@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "WolfTrace Configuration",
+  "type": "object",
+  "properties": {
+    "graph_engine": {
+      "type": "object",
+      "properties": {
+        "use_neo4j": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use Neo4j database instead of in-memory graph"
+        }
+      }
+    },
+    "plugins": {
+      "type": "object",
+      "properties": {
+        "auto_load": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically load plugins on startup"
+        },
+        "directory": {
+          "type": "string",
+          "default": "plugins",
+          "description": "Directory containing plugins"
+        }
+      }
+    },
+    "ui": {
+      "type": "object",
+      "properties": {
+        "theme": {
+          "type": "string",
+          "enum": ["dark", "light"],
+          "default": "dark"
+        },
+        "node_colors": {
+          "type": "object",
+          "description": "Custom node colors by type"
+        }
+      }
+    }
+  }
+}
+

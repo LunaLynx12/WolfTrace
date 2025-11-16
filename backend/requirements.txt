@@ -1,0 +1,7 @@
+flask==3.0.0
+flask-cors==4.0.0
+neo4j==5.15.0
+networkx==3.2.1
+python-dotenv==1.0.0
+jsonschema==4.20.0
+flask-socketio==5.3.6

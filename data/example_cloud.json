@@ -1,0 +1,41 @@
+{
+  "provider": "aws",
+  "resources": [
+    {
+      "id": "i-1234567890abcdef0",
+      "type": "ec2",
+      "name": "web-server-1",
+      "properties": {
+        "instance_type": "t3.medium",
+        "region": "us-east-1"
+      },
+      "relationships": [
+        {
+          "target": "sg-0123456789abcdef0",
+          "type": "HAS_SECURITY_GROUP"
+        },
+        {
+          "target": "vpc-0123456789abcdef0",
+          "type": "IN_VPC"
+        }
+      ]
+    },
+    {
+      "id": "sg-0123456789abcdef0",
+      "type": "security-group",
+      "name": "web-sg",
+      "relationships": [
+        {
+          "target": "vpc-0123456789abcdef0",
+          "type": "IN_VPC"
+        }
+      ]
+    },
+    {
+      "id": "vpc-0123456789abcdef0",
+      "type": "vpc",
+      "name": "main-vpc"
+    }
+  ]
+}
+

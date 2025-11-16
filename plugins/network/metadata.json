@@ -1,0 +1,7 @@
+{
+  "name": "network",
+  "version": "1.0.0",
+  "description": "Network topology and connection mapper",
+  "supported_formats": ["json"]
+}
+

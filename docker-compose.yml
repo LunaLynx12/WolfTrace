@@ -1,0 +1,31 @@
+services:
+  bucihound:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./plugins:/app/plugins
+      - ./data:/app/data
+      - ./config:/app/config
+    environment:
+      - PORT=5000
+    restart: unless-stopped
+
+  # Optional: Neo4j for persistent storage
+  neo4j:
+    image: neo4j:5.15
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    environment:
+      - NEO4J_AUTH=neo4j/password
+      - NEO4J_PLUGINS=["apoc"]
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    restart: unless-stopped
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
+
