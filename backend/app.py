@@ -6,9 +6,11 @@ from flask_cors import CORS
 import os
 import io
 import json
+import zipfile
 from dotenv import load_dotenv
 from graph_engine import GraphEngine
 from plugin_manager import PluginManager
+from pathlib import Path
 from graph_analytics import GraphAnalytics
 from session_manager import SessionManager
 from query_builder import QueryBuilder
@@ -25,7 +27,8 @@ CORS(app)
 
 # Initialize components
 graph_engine = GraphEngine()
-plugin_manager = PluginManager()
+plugins_path = str((Path(__file__).resolve().parent.parent / 'plugins').resolve())
+plugin_manager = PluginManager(plugins_dir=plugins_path)
 analytics = GraphAnalytics(graph_engine)
 session_manager = SessionManager()
 query_builder = QueryBuilder(graph_engine)
@@ -124,6 +127,67 @@ def import_data():
         result = plugin_manager.process_data(collector, import_data, graph_engine)
         history_manager.save_state(graph_engine.get_full_graph(), f"Import data via {collector}")
         return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+def _merge_json_objects(acc, obj):
+    """
+    Merge two JSON-like Python objects (dicts). Lists are concatenated,
+    dicts are merged recursively, scalars override.
+    """
+    if acc is None:
+        return obj
+    if isinstance(acc, dict) and isinstance(obj, dict):
+        out = dict(acc)
+        for k, v in obj.items():
+            if k in out:
+                if isinstance(out[k], list) and isinstance(v, list):
+                    out[k] = out[k] + v
+                elif isinstance(out[k], dict) and isinstance(v, dict):
+                    out[k] = _merge_json_objects(out[k], v)
+                else:
+                    out[k] = v
+            else:
+                out[k] = v
+        return out
+    if isinstance(acc, list) and isinstance(obj, list):
+        return acc + obj
+    return obj
+
+@app.route('/api/import-zip', methods=['POST'])
+def import_zip():
+    """
+    Import a ZIP archive containing one or more JSON files.
+    Merges all JSON files into a single object and passes to the given plugin.
+    """
+    collector = request.form.get('collector')
+    file = request.files.get('file')
+
+    if not collector:
+        return jsonify({"error": "Collector name required"}), 400
+    if not file:
+        return jsonify({"error": "ZIP file required (multipart/form-data with 'file')"}), 400
+
+    try:
+        merged = None
+        with zipfile.ZipFile(file.stream) as zf:
+            for name in zf.namelist():
+                if name.lower().endswith('.json'):
+                    with zf.open(name) as f:
+                        try:
+                            data = json.load(f)
+                            merged = _merge_json_objects(merged, data)
+                        except Exception:
+                            # skip invalid JSON entries
+                            continue
+        if merged is None:
+            return jsonify({"error": "No valid JSON files found in archive"}), 400
+
+        result = plugin_manager.process_data(collector, merged, graph_engine)
+        history_manager.save_state(graph_engine.get_full_graph(), f"Import ZIP via {collector}")
+        return jsonify(result)
+    except zipfile.BadZipFile:
+        return jsonify({"error": "Invalid ZIP file"}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 

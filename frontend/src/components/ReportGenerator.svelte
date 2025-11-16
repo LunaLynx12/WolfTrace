@@ -1,5 +1,6 @@
 <script>
   import axios from 'axios';
+  import Button from './ui/Button.svelte';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -49,21 +50,19 @@
   <h3>Generate Report</h3>
   
   <div style="margin-bottom: 15px;">
-    <label>Report Format</label>
-    <select bind:value={format} class="input-field">
+    <label for="report-format">Report Format</label>
+    <select id="report-format" bind:value={format} class="input-field">
       <option value="html">HTML Report</option>
       <option value="json">JSON Report</option>
     </select>
   </div>
 
-  <button
+  <Button
     on:click={generateReport}
     disabled={loading}
-    class="btn-primary"
-    style="width: 100%;"
   >
     {loading ? 'Generating...' : 'Generate Report'}
-  </button>
+  </Button>
 
   <p style="margin-top: 15px; color: #888; font-size: 12px;">
     Reports include graph statistics, node/edge counts, and analytics data.

@@ -14,9 +14,9 @@
 {#if browser && mounted}
   <App />
 {:else}
-  <div style="padding: 20px; text-align: center; color: #fff; background: #1a1a1a; min-height: 100vh; display: flex; align-items: center; justify-content: center;">
-    <div>
-      <p>Loading WolfTrace...</p>
+  <div style="padding: 20px; text-align: center; color: var(--text-0); background: transparent; min-height: 100vh; display: flex; align-items: center; justify-content: center;">
+    <div class="graph-stats-widget" style="background: rgba(26, 32, 44, 0.7); backdrop-filter: blur(6px); border: 1px solid var(--border);">
+      <p style="margin: 0;">Loading WolfTrace...</p>
     </div>
   </div>
 {/if}

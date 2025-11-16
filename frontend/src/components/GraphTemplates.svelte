@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import axios from 'axios';
+  import Button from './ui/Button.svelte';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -67,8 +68,9 @@
   <h3>Graph Templates</h3>
 
   <div style="margin-bottom: 15px;">
-    <label>Select Template</label>
+    <label for="gt-select-template">Select Template</label>
     <select
+      id="gt-select-template"
       bind:value={selectedTemplate}
       on:change={() => loadTemplateDetails(selectedTemplate)}
       class="input-field"
@@ -81,8 +83,8 @@
   </div>
 
   {#if templateDetails && templateDetails.variables && templateDetails.variables.length > 0}
-    <div style="margin-bottom: 15px;">
-      <label>Template Variables</label>
+    <fieldset style="border: none; padding: 0; margin: 0 0 15px 0;">
+      <legend>Template Variables</legend>
       {#each templateDetails.variables as varName}
         <input
           type="text"
@@ -92,7 +94,7 @@
           style="margin-bottom: 5px;"
         />
       {/each}
-    </div>
+    </fieldset>
   {/if}
 
   {#if templateDetails}
@@ -104,13 +106,11 @@
     </div>
   {/if}
 
-  <button
+  <Button
     on:click={applyTemplate}
     disabled={!selectedTemplate || loading}
-    class="btn-primary"
-    style="width: 100%;"
   >
     {loading ? 'Applying...' : 'Apply Template'}
-  </button>
+  </Button>
 </div>
 

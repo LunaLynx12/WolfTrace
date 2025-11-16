@@ -1,10 +1,12 @@
 <script>
   import { onMount } from 'svelte';
   import axios from 'axios';
+  import Button from './ui/Button.svelte';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
-  export let currentGraph;
+  // currentGraph was unused and triggered a warning; keep for external reference if needed
+  export const currentGraph = undefined;
   export let onLoadDiffGraph;
 
   let session1 = '';
@@ -77,8 +79,8 @@
   <h3>Graph Comparison</h3>
 
   <div style="margin-bottom: 15px;">
-    <label>Graph 1 (Session)</label>
-    <select bind:value={session1} on:change={() => loadSession(session1, (d) => graph1Data = d)} class="input-field">
+    <label for="gc-session1">Graph 1 (Session)</label>
+    <select id="gc-session1" bind:value={session1} on:change={() => loadSession(session1, (d) => graph1Data = d)} class="input-field">
       <option value="">Select session...</option>
       {#each sessions as session}
         <option value={session.id}>{session.name}</option>
@@ -90,8 +92,8 @@
   </div>
 
   <div style="margin-bottom: 15px;">
-    <label>Graph 2 (Session)</label>
-    <select bind:value={session2} on:change={() => loadSession(session2, (d) => graph2Data = d)} class="input-field">
+    <label for="gc-session2">Graph 2 (Session)</label>
+    <select id="gc-session2" bind:value={session2} on:change={() => loadSession(session2, (d) => graph2Data = d)} class="input-field">
       <option value="">Select session...</option>
       {#each sessions as session}
         <option value={session.id}>{session.name}</option>
@@ -102,14 +104,12 @@
     {/if}
   </div>
 
-  <button
+  <Button
     on:click={compareGraphs}
     disabled={!graph1Data || !graph2Data || loading}
-    class="btn-primary"
-    style="width: 100%;"
   >
     {loading ? 'Comparing...' : 'Compare Graphs'}
-  </button>
+  </Button>
 
   {#if comparison}
     <div style="margin-top: 15px; padding: 10px; background: #333; border-radius: 4px; font-size: 12px;">

@@ -1,5 +1,6 @@
 <script>
   import axios from 'axios';
+  import Button from './ui/Button.svelte';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -73,8 +74,8 @@
     </p>
 
     <div style="margin-bottom: 15px;">
-      <label>Operation</label>
-      <select bind:value={operation} class="input-field">
+      <label for="bulkop-operation">Operation</label>
+      <select id="bulkop-operation" bind:value={operation} class="input-field">
         <option value="delete">Delete Nodes</option>
         <option value="tag">Add Tags</option>
       </select>
@@ -82,24 +83,24 @@
 
     {#if operation === 'tag'}
       <div style="margin-bottom: 15px;">
-        <label>Tags (comma-separated)</label>
+        <label for="bulkop-tags">Tags (comma-separated)</label>
         <input
           type="text"
           placeholder="tag1, tag2, tag3"
+          id="bulkop-tags"
           bind:value={tags}
           class="input-field"
         />
       </div>
     {/if}
 
-    <button
+    <Button
       on:click={operation === 'delete' ? handleBulkDelete : handleBulkTag}
       disabled={loading || (operation === 'tag' && !tags.trim())}
-      class={operation === 'delete' ? 'btn-danger' : 'btn-primary'}
-      style="width: 100%;"
+      variant={operation === 'delete' ? 'danger' : 'primary'}
     >
       {loading ? 'Processing...' : (operation === 'delete' ? `Delete ${selectedNodes.length} Nodes` : 'Add Tags')}
-    </button>
+    </Button>
   {/if}
 </div>
 

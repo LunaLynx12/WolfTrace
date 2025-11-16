@@ -93,28 +93,27 @@
     <input
       type="text"
       placeholder="Search nodes..."
+      id="searchbar-query-input"
       bind:value={query}
       on:focus={() => showResults = results.length > 0}
       class="search-input"
       style="flex: 1;"
     />
-    <button
-      on:click={() => showFilters = !showFilters}
-      class="btn-secondary"
-      style="padding: 8px 12px; font-size: 12px;"
+    <i
+      class="bi bi-funnel icon-action"
       title="Toggle filters"
-    >
-      🔍
-    </button>
+      on:click={() => (showFilters = !showFilters)}
+    ></i>
   </div>
 
   {#if showFilters}
     <div class="search-filters" style="margin-top: 10px; padding: 10px; background: #333; border-radius: 4px;">
       <div style="margin-bottom: 10px;">
-        <label style="font-size: 12px; color: #aaa; display: block; margin-bottom: 5px;">
+        <label for="searchbar-node-type" style="font-size: 12px; color: #aaa; display: block; margin-bottom: 5px;">
           Node Type
         </label>
         <select
+          id="searchbar-node-type"
           bind:value={filters.nodeType}
           class="input-field"
           style="font-size: 12px;"
@@ -127,13 +126,14 @@
       </div>
 
       <div>
-        <label style="font-size: 12px; color: #aaa; display: block; margin-bottom: 5px;">
+        <label for="searchbar-has-prop" style="font-size: 12px; color: #aaa; display: block; margin-bottom: 5px;">
           Has Property
         </label>
         <div style="display: flex; gap: 5px;">
           <input
             type="text"
             placeholder="Property name"
+            id="searchbar-has-prop"
             bind:value={filters.hasProperty}
             on:input={() => filters.propertyValue = ''}
             class="input-field"
@@ -143,6 +143,7 @@
             <input
               type="text"
               placeholder="Value (optional)"
+              id="searchbar-prop-value"
               bind:value={filters.propertyValue}
               class="input-field"
               style="flex: 1; font-size: 12px;"
@@ -170,13 +171,15 @@
         {results.length} result(s)
       </div>
       {#each results as node, idx}
-        <div
+        <button
+          type="button"
           class="search-result-item"
           on:click={() => handleSelect(node)}
+          style="width: 100%; text-align: left; background: none; border: none; cursor: pointer;"
         >
           <strong>{node.id}</strong>
           <span class="node-type-badge">{node.type}</span>
-        </div>
+        </button>
       {/each}
     </div>
   {/if}

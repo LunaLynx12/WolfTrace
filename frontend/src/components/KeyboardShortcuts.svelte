@@ -1,6 +1,7 @@
 <script>
   export let isOpen;
   export let onClose;
+  import Button from './ui/Button.svelte';
 
   const shortcuts = [
     { keys: ['Ctrl', 'Z'], description: 'Undo last operation' },
@@ -16,34 +17,34 @@
 </script>
 
 {#if isOpen}
-  <div class="shortcuts-modal-overlay" on:click={onClose} on:keydown={(e) => e.key === 'Escape' && onClose()}>
-    <div class="shortcuts-modal" on:click|stopPropagation>
-      <div class="shortcuts-header">
-        <h2>Keyboard Shortcuts</h2>
-        <button on:click={onClose} class="btn-close" style="padding: 5px 10px;">
-          ×
-        </button>
-      </div>
-      <div class="shortcuts-content">
-        {#each shortcuts as shortcut}
-          <div class="shortcut-item">
-            <div class="shortcut-keys">
-              {#each shortcut.keys as key, keyIdx}
-                <kbd>{key}</kbd>
-                {#if keyIdx < shortcut.keys.length - 1}
-                  <span> + </span>
-                {/if}
-              {/each}
-            </div>
-            <div class="shortcut-description">{shortcut.description}</div>
+  <button
+    type="button"
+    class="shortcuts-modal-overlay"
+    aria-label="Close shortcuts"
+    on:click={onClose}
+    style="all: unset"
+  ></button>
+  <div class="shortcuts-modal" role="dialog" aria-modal="true">
+    <div class="shortcuts-header">
+      <h2>Keyboard Shortcuts</h2>
+      <Button variant="danger" size="sm" fullWidth={false} on:click={onClose} title="Close" style="padding: 4px 8px; min-width: auto;">
+        ×
+      </Button>
+    </div>
+    <div class="shortcuts-content">
+      {#each shortcuts as shortcut}
+        <div class="shortcut-item">
+          <div class="shortcut-keys">
+            {#each shortcut.keys as key, keyIdx}
+              <kbd>{key}</kbd>
+              {#if keyIdx < shortcut.keys.length - 1}
+                <span> + </span>
+              {/if}
+            {/each}
           </div>
-        {/each}
-      </div>
-      <div class="shortcuts-footer">
-        <button on:click={onClose} class="btn-primary">
-          Close
-        </button>
-      </div>
+          <div class="shortcut-description">{shortcut.description}</div>
+        </div>
+      {/each}
     </div>
   </div>
 {/if}

@@ -1,6 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
-  import ForceGraph from 'force-graph';
+  import { onMount, onDestroy } from 'svelte';
   import axios from 'axios';
   import SearchBar from './components/SearchBar.svelte';
   import AnalyticsPanel from './components/AnalyticsPanel.svelte';
@@ -15,6 +14,8 @@
   import NodeGrouping from './components/NodeGrouping.svelte';
   import KeyboardShortcuts from './components/KeyboardShortcuts.svelte';
   import GraphStatsWidget from './components/GraphStatsWidget.svelte';
+  import Button from './components/ui/Button.svelte';
+  import TabButton from './components/ui/TabButton.svelte';
   import NodeNotes from './components/NodeNotes.svelte';
   import { cacheManager } from './utils/cache.js';
   import './App.css';
@@ -39,20 +40,33 @@
   let nodeGrouping = null;
   let graphContainer;
   let graphInstance = null;
+  let ForceGraphLib = null;
+  let graphCollapsed = false;
+  let selectedImportPlugin = 'iam';
+  let resizeObserver = null;
 
-  onMount(() => {
-    loadGraph();
-    loadPlugins();
-    initCache();
+  let initialLoaded = false;
+
+  onMount(async () => {
+    await loadPlugins();
+    await initCache();
+    if (!initialLoaded) {
+      await loadGraph();
+    }
     initGraph();
     setupKeyboardShortcuts();
   });
 
-  function initGraph() {
+  async function initGraph() {
     // Only initialize in browser environment
     if (typeof window === 'undefined' || typeof document === 'undefined') return;
-    if (graphContainer && !graphInstance) {
-      graphInstance = ForceGraph()(graphContainer)
+    if (!ForceGraphLib) {
+      // Lazy-load to avoid SSR importing force-graph (which touches window)
+      const mod = await import('force-graph');
+      ForceGraphLib = mod.default || mod;
+    }
+    if (graphContainer && !graphInstance && ForceGraphLib) {
+      graphInstance = ForceGraphLib()(graphContainer)
         .nodeLabel(node => `${node.id} (${node.type})`)
         .nodeColor(nodeColor)
         .linkLabel(link => `${link.type || 'RELATED_TO'}`)
@@ -67,13 +81,48 @@
           }
         })
         .nodeVal(node => Math.sqrt(Object.keys(node).length) * 3)
-        .backgroundColor('#1a1a1a')
+        // draw type text on top of each node circle
+        .nodeCanvasObjectMode(() => 'after')
+        .nodeCanvasObject((node, ctx, globalScale) => {
+          const typeRaw = (node.type || '').toString();
+          if (!typeRaw) return;
+          const typeLabel = typeRaw.charAt(0).toUpperCase() + typeRaw.slice(1);
+          const fontSize = Math.max(3, 3 / globalScale) + 2; // scale-aware small label
+          ctx.save();
+          ctx.font = `${fontSize}px Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+          ctx.fillStyle = '#ffffff';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(typeLabel, node.x, node.y);
+          ctx.restore();
+        })
+        .backgroundColor('rgba(0,0,0,0)')
         .cooldownTicks(100)
         .onEngineStop(() => {
           if (graphInstance) graphInstance.zoomToFit(400);
         });
-      
+
+      // ensure correct sizing
+      queueMicrotask(() => updateGraphSize());
+
+      if (typeof ResizeObserver !== 'undefined') {
+        resizeObserver = new ResizeObserver(() => updateGraphSize());
+        resizeObserver.observe(graphContainer);
+      }
+      if (typeof window !== 'undefined') {
+        window.addEventListener('resize', updateGraphSize);
+      }
+
       updateGraph();
+    }
+  }
+
+  function updateGraphSize() {
+    if (!graphInstance || !graphContainer) return;
+    const w = graphContainer.clientWidth || 0;
+    const h = graphContainer.clientHeight || 0;
+    if (w > 0 && h > 0) {
+      graphInstance.width(w).height(h);
     }
   }
 
@@ -129,7 +178,10 @@
       if (cachedGraph && cachedGraph.nodes?.length > 0) {
         if (window.confirm('Load cached graph from previous session?')) {
           graphData = cachedGraph;
+          initialLoaded = true;
           updateGraph();
+        } else {
+          initialLoaded = false;
         }
       }
     } catch (error) {
@@ -200,20 +252,28 @@
 
     loading = true;
     try {
-      const text = await file.text();
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = text;
+      if (file.name.toLowerCase().endsWith('.zip') || file.type === 'application/zip' || file.type === 'application/x-zip-compressed') {
+        const form = new FormData();
+        form.append('collector', pluginName);
+        form.append('file', file);
+        const response = await axios.post(`${API_BASE}/import-zip`, form, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        });
+        showNotification(`Import successful: ${response.data.result?.message || 'ZIP imported'}`, 'success');
+      } else {
+        const text = await file.text();
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = text;
+        }
+        const response = await axios.post(`${API_BASE}/import`, {
+          collector: pluginName,
+          data: data
+        });
+        showNotification(`Import successful: ${response.data.result.message}`, 'success');
       }
-
-      const response = await axios.post(`${API_BASE}/import`, {
-        collector: pluginName,
-        data: data
-      });
-
-      showNotification(`Import successful: ${response.data.result.message}`, 'success');
       await loadGraph();
     } catch (error) {
       showNotification(`Import failed: ${error.response?.data?.error || error.message}`, 'error');
@@ -280,8 +340,8 @@
     }
     
     if (graphInstance && node.x !== undefined && node.y !== undefined) {
-      graphInstance.centerAt(node.x, node.y, 1000);
-      graphInstance.zoom(2, 1000);
+      graphInstance.centerAt(node.x, node.y, 600);
+      graphInstance.zoom(2, 600);
     }
   }
 
@@ -326,8 +386,8 @@
     if (graphInstance) {
       const graphNode = graphData.nodes.find(n => n.id === node.id);
       if (graphNode && graphNode.x !== undefined && graphNode.y !== undefined) {
-        graphInstance.centerAt(graphNode.x, graphNode.y, 1000);
-        graphInstance.zoom(2, 1000);
+        graphInstance.centerAt(graphNode.x, graphNode.y, 600);
+        graphInstance.zoom(2, 600);
       }
     }
   }
@@ -419,72 +479,54 @@
   $: if (graphInstance && graphData) {
     updateGraph();
   }
+
+  // re-measure after collapsing/expanding
+  $: if (graphCollapsed !== undefined) {
+    if (typeof window !== 'undefined') {
+      setTimeout(updateGraphSize, 50);
+    }
+  }
+
+  onDestroy(() => {
+    if (resizeObserver) {
+      try { resizeObserver.disconnect(); } catch {}
+      resizeObserver = null;
+    }
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('resize', updateGraphSize);
+    }
+  });
 </script>
 
-<div class="app">
+<div class="app" class:graph-collapsed={graphCollapsed}>
   <div class="sidebar">
-    <div class="sidebar-header">
-      <h1>WolfTrace</h1>
-      <p class="subtitle">Modular Graph Visualization</p>
+    <div class="sidebar-header" style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+      <div>
+        <h1>WolfTrace</h1>
+        <p class="subtitle">Modular Graph Visualization</p>
+      </div>
+      <Button
+        variant="secondary"
+        ariaPressed={graphCollapsed}
+        ariaExpanded={!graphCollapsed}
+        title={graphCollapsed ? 'Expand Graph Area' : 'Collapse Graph Area'}
+        on:click={() => (graphCollapsed = !graphCollapsed)}
+        style="padding: 6px 10px; font-size: 12px; white-space: nowrap;"
+        fullWidth={false}
+      >
+        {graphCollapsed ? 'Show Graph' : 'Hide Graph'}
+      </Button>
     </div>
 
-    <div class="view-tabs">
-      <button
-        class="view-tab"
-        class:view-tab-active={activeView === 'graph'}
-        on:click={() => activeView = 'graph'}
-      >
-        Graph
-      </button>
-      <button
-        class="view-tab"
-        class:view-tab-active={activeView === 'analytics'}
-        on:click={() => activeView = 'analytics'}
-      >
-        Analytics
-      </button>
-      <button
-        class="view-tab"
-        class:view-tab-active={activeView === 'query'}
-        on:click={() => activeView = 'query'}
-      >
-        Query
-      </button>
-      <button
-        class="view-tab"
-        class:view-tab-active={activeView === 'sessions'}
-        on:click={() => activeView = 'sessions'}
-      >
-        Sessions
-      </button>
-      <button
-        class="view-tab"
-        class:view-tab-active={activeView === 'compare'}
-        on:click={() => activeView = 'compare'}
-      >
-        Compare
-      </button>
-      <button
-        class="view-tab"
-        class:view-tab-active={activeView === 'bulk'}
-        on:click={() => activeView = 'bulk'}
-      >
-        Bulk
-      </button>
-      <button
-        class="view-tab"
-        class:view-tab-active={activeView === 'templates'}
-        on:click={() => activeView = 'templates'}
-      >
-        Templates
-      </button>
-      <button
-        class="view-tab"
-        class:view-tab-active={activeView === 'report'}
-        on:click={() => activeView = 'report'}
-      >
-        Report
-      </button>
+    <div class="view-tabs" role="tablist" aria-label="Views">
+      <TabButton active={activeView === 'graph'} onClick={() => activeView = 'graph'} title="Graph">Graph</TabButton>
+      <TabButton active={activeView === 'analytics'} onClick={() => activeView = 'analytics'} title="Analytics">Analytics</TabButton>
+      <TabButton active={activeView === 'query'} onClick={() => activeView = 'query'} title="Query">Query</TabButton>
+      <TabButton active={activeView === 'sessions'} onClick={() => activeView = 'sessions'} title="Sessions">Sessions</TabButton>
+      <TabButton active={activeView === 'compare'} onClick={() => activeView = 'compare'} title="Compare">Compare</TabButton>
+      <TabButton active={activeView === 'bulk'} onClick={() => activeView = 'bulk'} title="Bulk">Bulk</TabButton>
+      <TabButton active={activeView === 'templates'} onClick={() => activeView = 'templates'} title="Templates">Templates</TabButton>
+      <TabButton active={activeView === 'report'} onClick={() => activeView = 'report'} title="Report">Report</TabButton>
     </div>
 
     <div class="sidebar-section" style="padding: 10px 0; border-bottom: 1px solid #444;">
@@ -505,14 +547,11 @@
       <div class="sidebar-section">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
           <h2 style="margin: 0;">Search</h2>
-          <button
-            on:click={() => showShortcuts = true}
-            class="btn-secondary"
-            style="padding: 5px 10px; font-size: 11px;"
-            title="Keyboard shortcuts (?)"
-          >
-            ⌨️
-          </button>
+          <i
+            class="bi bi-keyboard icon-action"
+            title="Keyboard shortcuts"
+            on:click={() => (showShortcuts = true)}
+          ></i>
         </div>
         <SearchBar 
           onNodeSelect={(node) => selectedNode = node}
@@ -536,17 +575,55 @@
 
       <div class="sidebar-section">
         <h2>Import Data</h2>
+        <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px;">
+          <select
+            class="input-field"
+            bind:value={selectedImportPlugin}
+            style="margin: 0; width: 50%; padding: 6px 8px;"
+          >
+            {#each plugins as plugin}
+              <option value={plugin.name}>{plugin.name}</option>
+            {/each}
+          </select>
+          <Button
+            style="padding: 8px 12px; width: 50%; margin: 0;"
+            on:click={() => document.getElementById('file-import-generic')?.click()}
+            title="Choose JSON or ZIP to import"
+          >
+            Choose JSON/ZIP to Import
+          </Button>
+          <input
+            id="file-import-generic"
+            type="file"
+            accept=".json,application/json,.zip,application/zip,application/x-zip-compressed"
+            on:change={(e) => handleFileUpload(e, selectedImportPlugin)}
+            style="display: none;"
+          />
+        </div>
         {#each plugins as plugin}
           <div class="plugin-item">
-            <label class="plugin-label">
-              {plugin.name}
-              <input
-                type="file"
-                on:change={(e) => handleFileUpload(e, plugin.name)}
-                style="display: none;"
-              />
-            </label>
-            <small>{plugin.description}</small>
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px;">
+              <div style="display: flex; flex-direction: column;">
+                <strong style="color: var(--text-0); text-transform: capitalize;">{plugin.name}</strong>
+                <small style="color: var(--text-2);">{plugin.description}</small>
+              </div>
+              <div>
+                <Button
+                  style="padding: 6px 10px; width: auto; margin-top: 0;"
+                  on:click={() => document.getElementById(`file-${plugin.name}`)?.click()}
+                  fullWidth={false}
+                >
+                  Import File
+                </Button>
+              </div>
+            </div>
+            <input
+              id={`file-${plugin.name}`}
+              type="file"
+              accept=".json,application/json,.zip,application/zip,application/x-zip-compressed"
+              on:change={(e) => handleFileUpload(e, plugin.name)}
+              style="display: none;"
+            />
           </div>
         {/each}
       </div>
@@ -565,31 +642,31 @@
           bind:value={targetNode}
           class="input-field"
         />
-        <button on:click={findPaths} class="btn-primary">Find Paths</button>
+        <Button on:click={findPaths}>Find Paths</Button>
         {#if pathResult && pathResult.length > 0}
           <div class="path-result">
             <strong>Found {pathResult.length} path(s):</strong>
             {#each pathResult as path, idx}
-              <button 
-                type="button"
-                class="path-item"
-                class:path-highlighted={highlightedPath === path}
-                style="cursor: pointer; background: none; border: none; text-align: left; width: 100%; padding: 8px;"
+              <Button
+                variant="secondary"
+                fullWidth={true}
+                style="margin-top: 8px; text-align: left;"
+                active={highlightedPath === path}
                 on:click={() => highlightedPath = path}
               >
                 {path.join(' → ')}
-              </button>
+              </Button>
             {/each}
           </div>
         {/if}
         {#if highlightedPath}
-          <button 
+          <Button 
+            variant="secondary"
             on:click={() => highlightedPath = null} 
-            class="btn-secondary"
             style="margin-top: 10px;"
           >
             Clear Highlight
-          </button>
+          </Button>
         {/if}
       </div>
 
@@ -598,9 +675,9 @@
         <p>Nodes: {graphData.nodes.length}</p>
         <p>Edges: {graphData.links.length}</p>
         <ExportButton graphData={graphData} graphInstance={graphInstance} />
-        <button on:click={clearGraph} class="btn-danger" style="margin-top: 10px;">
+        <Button variant="danger" on:click={clearGraph} style="margin-top: 10px;">
           Clear Graph
-        </button>
+        </Button>
       </div>
 
       {#if selectedNode}
@@ -608,34 +685,38 @@
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
             <h2 style="margin: 0;">Selected Node</h2>
             <div style="display: flex; gap: 5px;">
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
                 on:click={() => {
                   copiedNode = selectedNode;
                   showNotification('Node copied', 'success');
                 }}
-                class="btn-secondary"
-                style="padding: 2px 8px; font-size: 11px;"
                 title="Copy (Ctrl+C)"
+                fullWidth={false}
               >
                 📋
-              </button>
+              </Button>
               {#if copiedNode}
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
                   on:click={handlePasteNode}
-                  class="btn-secondary"
-                  style="padding: 2px 8px; font-size: 11px;"
                   title="Paste (Ctrl+V)"
+                  fullWidth={false}
                 >
                   📄
-                </button>
+                </Button>
               {/if}
-              <button 
+              <Button 
+                variant="close"
+                size="sm"
                 on:click={() => selectedNode = null} 
-                class="btn-close"
-                style="padding: 2px 8px; font-size: 12px;"
+                fullWidth={false}
+                title="Close"
               >
                 ×
-              </button>
+              </Button>
             </div>
           </div>
           <div class="node-details">
@@ -728,14 +809,42 @@
     onClose={() => showShortcuts = false}
   />
 
-  <div class="graph-container">
-    <div style="position: absolute; top: 10px; right: 10px; z-index: 1000;">
-      <GraphStatsWidget graphData={graphData} compact={true} />
+  <div class="graph-container" class:collapsed={graphCollapsed}>
+    <div class="graph-inner">
+      <div class="graph-toolbar">
+        <Button
+          variant="secondary"
+          ariaPressed={graphCollapsed}
+          ariaExpanded={!graphCollapsed}
+          title={graphCollapsed ? 'Expand Graph' : 'Collapse Graph'}
+          on:click={() => (graphCollapsed = !graphCollapsed)}
+          style="padding: 6px 10px; font-size: 12px;"
+          fullWidth={false}
+        >
+          {graphCollapsed ? 'Show Graph' : 'Hide Graph'}
+        </Button>
+      </div>
+      <div style="position: absolute; top: 10px; right: 10px; z-index: 1000;">
+        <GraphStatsWidget graphData={graphData} compact={true} />
+      </div>
+      {#if loading}
+        <div class="loading">Loading...</div>
+      {/if}
+      <div
+        class="graph-surface"
+        bind:this={graphContainer}
+        style="height: {graphCollapsed ? '0px' : ( (graphData?.nodes?.length || 0) + (graphData?.links?.length || 0) > 0 ? '100%' : '420px')}; opacity: {graphCollapsed ? 0 : 1};"
+      >
+        {#if !graphCollapsed && (graphData?.nodes?.length || 0) + (graphData?.links?.length || 0) === 0 && !loading}
+          <div style="height: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-2);">
+            <div style="text-align: center;">
+              <div style="font-size: 14px; margin-bottom: 6px;">No graph data yet</div>
+              <div style="font-size: 12px;">Import data or run a query to get started</div>
+            </div>
+          </div>
+        {/if}
+      </div>
     </div>
-    {#if loading}
-      <div class="loading">Loading...</div>
-    {/if}
-    <div bind:this={graphContainer}></div>
   </div>
 </div>
 

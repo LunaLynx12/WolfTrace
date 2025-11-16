@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import axios from 'axios';
+  import Button from './ui/Button.svelte';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -78,9 +79,9 @@
 <div class="session-manager">
   <div class="session-header">
     <h3>Session Manager</h3>
-    <button on:click={() => showSaveDialog = !showSaveDialog} class="btn-primary" style="font-size: 12px; padding: 5px 10px;">
+    <Button on:click={() => showSaveDialog = !showSaveDialog} style="font-size: 12px; padding: 5px 10px; width: auto;">
       Save Session
-    </button>
+    </Button>
   </div>
 
   {#if showSaveDialog}
@@ -99,12 +100,12 @@
         rows="3"
       />
       <div style="display: flex; gap: 5px;">
-        <button on:click={saveSession} disabled={loading} class="btn-primary" style="flex: 1;">
+        <Button on:click={saveSession} disabled={loading} style="flex: 1;">
           {loading ? 'Saving...' : 'Save'}
-        </button>
-        <button on:click={() => showSaveDialog = false} class="btn-secondary" style="flex: 1;">
+        </Button>
+        <Button variant="secondary" on:click={() => showSaveDialog = false} style="flex: 1;">
           Cancel
-        </button>
+        </Button>
       </div>
     </div>
   {/if}
@@ -115,16 +116,16 @@
     {:else}
       {#each sessions as session}
         <div class="session-item">
-          <div class="session-info" on:click={() => loadSession(session.id)}>
+          <button type="button" class="session-info" on:click={() => loadSession(session.id)} style="all: unset; display: block; cursor: pointer;">
             <strong>{session.name}</strong>
             <small>{session.metadata?.node_count || 0} nodes, {session.metadata?.edge_count || 0} edges</small>
             {#if session.metadata?.description}
               <small style="display: block; margin-top: 2px;">{session.metadata.description}</small>
             {/if}
-          </div>
-          <button on:click={() => deleteSession(session.id)} class="btn-close" style="padding: 2px 6px; font-size: 10px;">
-            ×
           </button>
+          <Button variant="close" on:click={() => deleteSession(session.id)} style="padding: 2px 6px; font-size: 10px; width: auto;">
+            ×
+          </Button>
         </div>
       {/each}
     {/if}

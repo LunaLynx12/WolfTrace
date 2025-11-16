@@ -1,6 +1,7 @@
 <script>
   import axios from 'axios';
   import * as d3 from 'd3';
+  import Button from './ui/Button.svelte';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -162,14 +163,14 @@
 </script>
 
 <div class="export-buttons">
-  <button on:click={() => exportGraph('json')} class="btn-export">
+  <Button variant="primary" on:click={() => exportGraph('json')}>
     Export JSON
-  </button>
-  <button on:click={() => exportGraph('png')} class="btn-export">
+  </Button>
+  <Button variant="primary" on:click={() => exportGraph('png')}>
     Export PNG
-  </button>
-  <button on:click={() => exportGraph('svg')} class="btn-export">
+  </Button>
+  <Button variant="primary" on:click={() => exportGraph('svg')}>
     Export SVG
-  </button>
+  </Button>
 </div>
 

@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import axios from 'axios';
+  import Button from './ui/Button.svelte';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -82,8 +83,8 @@
 <div class="query-builder">
   <h3>Query Builder</h3>
 
-  <div class="query-section">
-    <label>Node Types</label>
+  <fieldset class="query-section" style="border: none; padding: 0; margin: 0 0 12px 0;">
+    <legend style="font-size: 14px; margin-bottom: 6px;">Node Types</legend>
     <div class="type-checkboxes">
       {#each availableTypes as type}
         <label class="checkbox-label">
@@ -96,45 +97,52 @@
         </label>
       {/each}
     </div>
-  </div>
+  </fieldset>
 
   <div class="query-section">
-    <label>Text Search</label>
+    <label for="qb-text-search">Text Search</label>
     <input
       type="text"
       placeholder="Search in node IDs and properties"
+      id="qb-text-search"
       bind:value={filters.text_search}
       class="input-field"
     />
   </div>
 
-  <div class="query-section">
-    <label>Degree Range</label>
+  <fieldset class="query-section" style="border: none; padding: 0; margin: 0;">
+    <legend style="font-size: 14px; margin-bottom: 6px;">Degree Range</legend>
     <div style="display: flex; gap: 5px;">
       <input
         type="number"
         placeholder="Min"
+        id="qb-min-degree"
         bind:value={filters.min_degree}
         class="input-field"
         style="flex: 1;"
+        aria-label="Minimum degree"
       />
       <input
         type="number"
         placeholder="Max"
+        id="qb-max-degree"
         bind:value={filters.max_degree}
         class="input-field"
         style="flex: 1;"
+        aria-label="Maximum degree"
       />
     </div>
-  </div>
+  </fieldset>
 
-  <div style="display: flex; gap: 5px; margin-top: 15px;">
-    <button on:click={executeQuery} disabled={loading} class="btn-primary" style="flex: 1;">
-      {loading ? 'Querying...' : 'Execute Query'}
-    </button>
-    <button on:click={clearQuery} class="btn-secondary" style="flex: 1;">
-      Clear
-    </button>
+  <div style="display: flex; gap: 8px; margin-top: 12px;">
+    <Button on:click={executeQuery} disabled={loading} fullWidth={false} size="sm">
+      <i class="bi bi-search" style="margin-right:8px;"></i>
+      {loading ? 'Querying…' : 'Run Query'}
+    </Button>
+    <Button variant="secondary" on:click={clearQuery} fullWidth={false} size="sm">
+      <i class="bi bi-arrow-counterclockwise" style="margin-right:8px;"></i>
+      Reset
+    </Button>
   </div>
 
   {#if queryResult}
