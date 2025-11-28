@@ -18,6 +18,7 @@
   import TabButton from './components/ui/TabButton.svelte';
   import NodeNotes from './components/NodeNotes.svelte';
   import { cacheManager } from './utils/cache.js';
+  import * as d3 from 'd3';
   import './App.css';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -42,7 +43,7 @@
   let graphInstance = null;
   let ForceGraphLib = null;
   let graphCollapsed = false;
-  let selectedImportPlugin = 'iam';
+  let graphFullscreen = false;
   let resizeObserver = null;
 
   let initialLoaded = false;
@@ -80,27 +81,101 @@
             document.body.style.cursor = node ? 'pointer' : 'default';
           }
         })
-        .nodeVal(node => Math.sqrt(Object.keys(node).length) * 3)
+        .nodeVal(node => {
+          // Hide default circle for stacked nodes
+          if (node.layoutType === 'stack') return 0;
+          return Math.sqrt(Object.keys(node).length) * 3;
+        })
         // draw type text on top of each node circle
-        .nodeCanvasObjectMode(() => 'after')
+        .nodeCanvasObjectMode((node) => {
+          // For stacked nodes, replace the default circle entirely
+          if (node.layoutType === 'stack') return 'replace';
+          return 'after';
+        })
         .nodeCanvasObject((node, ctx, globalScale) => {
           const typeRaw = (node.type || '').toString();
           if (!typeRaw) return;
           const typeLabel = typeRaw.charAt(0).toUpperCase() + typeRaw.slice(1);
           const fontSize = Math.max(3, 3 / globalScale) + 2; // scale-aware small label
+          
+          // Bloodweb-style glow effect
+          const level = node.level || 0;
+          const glowIntensity = Math.max(0.3, 1 - (level * 0.1));
+          const layoutType = node.layoutType || 'circle';
+          
           ctx.save();
-          ctx.font = `${fontSize}px Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial`;
-          ctx.fillStyle = '#ffffff';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText(typeLabel, node.x, node.y);
+          
+          // Draw rounded rectangle for stack layout (replaces default circle)
+          if (layoutType === 'stack') {
+            const width = 100;
+            const height = 35;
+            const radius = 8;
+            const x = node.x - width / 2;
+            const y = node.y - height / 2;
+            
+            // Draw rounded rectangle background with gradient
+            ctx.beginPath();
+            ctx.moveTo(x + radius, y);
+            ctx.lineTo(x + width - radius, y);
+            ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+            ctx.lineTo(x + width, y + height - radius);
+            ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+            ctx.lineTo(x + radius, y + height);
+            ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+            ctx.lineTo(x, y + radius);
+            ctx.quadraticCurveTo(x, y, x + radius, y);
+            ctx.closePath();
+            
+            // Create gradient for depth
+            const gradient = ctx.createLinearGradient(x, y, x, y + height);
+            const color = nodeColor(node);
+            gradient.addColorStop(0, color);
+            gradient.addColorStop(1, color + '80'); // Darker at bottom
+            
+            // Fill with gradient
+            ctx.fillStyle = gradient;
+            ctx.globalAlpha = 0.9;
+            ctx.fill();
+            
+            // Stroke with glow effect
+            ctx.strokeStyle = nodeColor(node);
+            ctx.lineWidth = 2.5;
+            ctx.shadowBlur = 8;
+            ctx.shadowColor = nodeColor(node);
+            ctx.globalAlpha = 1;
+            ctx.stroke();
+            
+            // Reset shadow for text
+            ctx.shadowBlur = 0;
+            
+            // Text with better visibility
+            ctx.font = `bold ${Math.max(10, fontSize + 1)}px Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(typeLabel, node.x, node.y);
+          } else {
+            // Circle layout - original text rendering
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = nodeColor(node);
+            ctx.font = `${fontSize}px Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+            ctx.fillStyle = `rgba(255, 255, 255, ${glowIntensity})`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(typeLabel, node.x, node.y);
+          }
+          
           ctx.restore();
         })
         .backgroundColor('rgba(0,0,0,0)')
         .cooldownTicks(100)
         .onEngineStop(() => {
           if (graphInstance) graphInstance.zoomToFit(400);
-        });
+        })
+        // Bloodweb-style forces - will be updated in updateGraph
+        .d3Force('charge', d3.forceManyBody().strength(-300))
+        .d3Force('link', d3.forceLink().id(d => d.id).distance(80).strength(0.5))
+        .d3Force('center', d3.forceCenter(0, 0).strength(0.05));
 
       // ensure correct sizing
       queueMicrotask(() => updateGraphSize());
@@ -210,10 +285,276 @@
     }
   }
 
+  function calculateBloodwebLayout(data) {
+    if (!data || !data.nodes || data.nodes.length === 0) return data;
+    
+    const nodeMap = new Map(data.nodes.map(n => [n.id, n]));
+    const linkMap = new Map();
+    
+    // Build adjacency map
+    data.links.forEach(link => {
+      const source = typeof link.source === 'string' ? link.source : link.source.id;
+      const target = typeof link.target === 'string' ? link.target : link.target.id;
+      
+      if (!linkMap.has(source)) linkMap.set(source, []);
+      if (!linkMap.has(target)) linkMap.set(target, []);
+      linkMap.get(source).push(target);
+      linkMap.get(target).push(source);
+    });
+    
+    // Find root: node with most connections, or first node
+    let rootId = data.nodes[0]?.id;
+    let maxConnections = 0;
+    data.nodes.forEach(node => {
+      const connections = linkMap.get(node.id)?.length || 0;
+      if (connections > maxConnections) {
+        maxConnections = connections;
+        rootId = node.id;
+      }
+    });
+    
+    // Calculate levels using BFS
+    const levels = new Map();
+    const visited = new Set();
+    const queue = [{ id: rootId, level: 0 }];
+    levels.set(rootId, 0);
+    visited.add(rootId);
+    
+    while (queue.length > 0) {
+      const current = queue.shift();
+      const neighbors = linkMap.get(current.id) || [];
+      
+      neighbors.forEach(neighborId => {
+        if (!visited.has(neighborId)) {
+          const level = current.level + 1;
+          levels.set(neighborId, level);
+          visited.add(neighborId);
+          queue.push({ id: neighborId, level });
+        }
+      });
+    }
+    
+    // Assign levels to all nodes (unconnected nodes get max level + 1)
+    const maxLevel = Math.max(...Array.from(levels.values()), 0);
+    data.nodes.forEach(node => {
+      if (!levels.has(node.id)) {
+        levels.set(node.id, maxLevel + 1);
+      }
+      node.level = levels.get(node.id);
+    });
+    
+    // Group nodes by type for stack layout
+    const stackableTypes = ['Certificate', 'Technology', 'Endpoint', 'WAF', 'NameServer'];
+    const nodesByType = new Map();
+    const circularNodes = [];
+    const stackableNodes = [];
+    
+    data.nodes.forEach(node => {
+      const nodeType = node.type || 'default';
+      if (stackableTypes.includes(nodeType)) {
+        if (!nodesByType.has(nodeType)) {
+          nodesByType.set(nodeType, []);
+        }
+        nodesByType.get(nodeType).push(node);
+        stackableNodes.push(node);
+      } else {
+        circularNodes.push(node);
+      }
+    });
+    
+    const centerX = 0;
+    const centerY = 0;
+    const baseRadius = 80;
+    const radiusStep = 120;
+    const stackSpacing = 100; // Vertical spacing for stacks
+    const stackWidth = 200; // Width of each stack column
+    
+    // Position circular nodes in concentric circles (if not too many)
+    const maxCircularNodes = 200; // Threshold for using circles
+    if (circularNodes.length <= maxCircularNodes) {
+      const nodesByLevel = new Map();
+      circularNodes.forEach(node => {
+        const level = node.level;
+        if (!nodesByLevel.has(level)) {
+          nodesByLevel.set(level, []);
+        }
+        nodesByLevel.get(level).push(node);
+      });
+      
+      nodesByLevel.forEach((nodes, level) => {
+        const radius = baseRadius + (level * radiusStep);
+        const angleStep = nodes.length > 0 ? (2 * Math.PI) / nodes.length : 0;
+        
+        nodes.forEach((node, index) => {
+          const angle = index * angleStep;
+          node.fx = centerX + radius * Math.cos(angle);
+          node.fy = centerY + radius * Math.sin(angle);
+          node.layoutType = 'circle';
+        });
+      });
+    } else {
+      // Too many nodes for circles - use grid/force layout
+      circularNodes.forEach((node, index) => {
+        const level = node.level;
+        const nodesInLevel = circularNodes.filter(n => n.level === level).length;
+        const indexInLevel = circularNodes.filter(n => n.level === level && 
+          circularNodes.indexOf(n) <= index).length - 1;
+        
+        // Use a spiral or grid pattern
+        const cols = Math.ceil(Math.sqrt(nodesInLevel));
+        const row = Math.floor(indexInLevel / cols);
+        const col = indexInLevel % cols;
+        const spacing = 150;
+        
+        node.fx = centerX + (col - cols/2) * spacing;
+        node.fy = centerY + (row - nodesInLevel/cols/2) * spacing;
+        node.layoutType = 'grid';
+      });
+    }
+    
+    // Position stackable nodes in vertical stacks (rounded rectangles)
+    let stackXOffset = centerX + (circularNodes.length > 0 ? 
+      (baseRadius + (maxLevel * radiusStep) + 200) : 0);
+    let stackColumn = 0;
+    const maxStacksPerColumn = 15;
+    
+    nodesByType.forEach((nodes, type) => {
+      // Sort nodes by level or connections
+      nodes.sort((a, b) => {
+        const aLevel = a.level || 0;
+        const bLevel = b.level || 0;
+        if (aLevel !== bLevel) return aLevel - bLevel;
+        return (linkMap.get(b.id)?.length || 0) - (linkMap.get(a.id)?.length || 0);
+      });
+      
+      const stackIndex = stackColumn % maxStacksPerColumn;
+      const columnIndex = Math.floor(stackColumn / maxStacksPerColumn);
+      const xPos = stackXOffset + (columnIndex * (stackWidth + 50));
+      
+      nodes.forEach((node, index) => {
+        const yPos = centerY - (nodes.length * stackSpacing / 2) + (index * stackSpacing);
+        node.fx = xPos;
+        node.fy = yPos;
+        node.layoutType = 'stack';
+        node.stackGroup = type;
+      });
+      
+      stackColumn++;
+    });
+    
+    // If we have many nodes, also use a hybrid approach for remaining nodes
+    const totalNodes = data.nodes.length;
+    if (totalNodes > 300) {
+      // Use a more efficient layout for large graphs
+      data.nodes.forEach(node => {
+        if (!node.fx && !node.fy) {
+          // Fallback: use level-based positioning
+          const level = node.level || 0;
+          const nodesInLevel = data.nodes.filter(n => (n.level || 0) === level).length;
+          const indexInLevel = data.nodes.filter(n => (n.level || 0) === level && 
+            data.nodes.indexOf(n) <= data.nodes.indexOf(node)).length - 1;
+          
+          if (nodesInLevel > 50) {
+            // Too many in one level - use grid
+            const cols = Math.ceil(Math.sqrt(nodesInLevel));
+            const row = Math.floor(indexInLevel / cols);
+            const col = indexInLevel % cols;
+            const spacing = 120;
+            node.fx = centerX + (col - cols/2) * spacing;
+            node.fy = centerY + (row - nodesInLevel/cols/2) * spacing;
+            node.layoutType = 'grid';
+          } else {
+            // Use circle for this level
+            const radius = baseRadius + (level * radiusStep);
+            const angleStep = (2 * Math.PI) / nodesInLevel;
+            const angle = indexInLevel * angleStep;
+            node.fx = centerX + radius * Math.cos(angle);
+            node.fy = centerY + radius * Math.sin(angle);
+            node.layoutType = 'circle';
+          }
+        }
+      });
+    }
+    
+    return data;
+  }
+
   function updateGraph() {
     if (graphInstance) {
       const data = getFilteredGraphData();
-      graphInstance.graphData(data);
+      
+      // Apply bloodweb layout
+      const layoutData = calculateBloodwebLayout(JSON.parse(JSON.stringify(data)));
+      
+      graphInstance.graphData(layoutData);
+      
+      // Apply dynamic forces based on layout type
+      graphInstance.d3Force('radial', d3.forceRadial()
+        .strength(d => {
+          // Only apply radial force to circular nodes
+          if (d.layoutType === 'stack') return 0;
+          return 0.9;
+        })
+        .radius(d => {
+          const level = d.level || 0;
+          return 80 + (level * 120);
+        })
+        .x(0)
+        .y(0)
+      )
+      .d3Force('collision', d3.forceCollide()
+        .radius(d => {
+          if (d.layoutType === 'stack') {
+            return 50; // Wider collision for stacked nodes
+          }
+          const size = d.__size || Math.sqrt(Object.keys(d).length) * 3 || 8;
+          return size + 8;
+        })
+        .strength(d => {
+          // Stronger collision for stacks to keep them aligned
+          if (d.layoutType === 'stack') return 1.0;
+          return 0.8;
+        })
+      )
+      .d3Force('stack', d3.forceY()
+        .strength(d => {
+          // Keep stacked nodes in their vertical position
+          if (d.layoutType === 'stack' && d.fy !== undefined) {
+            return 0.8;
+          }
+          return 0;
+        })
+        .y(d => d.fy || 0)
+      )
+      .d3Force('stackX', d3.forceX()
+        .strength(d => {
+          // Keep stacked nodes in their horizontal position
+          if (d.layoutType === 'stack' && d.fx !== undefined) {
+            return 0.8;
+          }
+          return 0;
+        })
+        .x(d => d.fx || 0)
+      )
+      .d3Force('charge', d3.forceManyBody()
+        .strength(d => {
+          // Less repulsion for stacked nodes
+          if (d.layoutType === 'stack') return -50;
+          return -200;
+        })
+      )
+      .d3Force('link', d3.forceLink().id(d => d.id).distance(d => {
+        // Shorter links for same level, longer for different levels
+        const sourceLevel = d.source.level || 0;
+        const targetLevel = d.target.level || 0;
+        const levelDiff = Math.abs(sourceLevel - targetLevel);
+        
+        // Different distances for different layout types
+        if (d.source.layoutType === 'stack' || d.target.layoutType === 'stack') {
+          return 100 + (levelDiff * 30);
+        }
+        return 60 + (levelDiff * 40);
+      }).strength(0.6));
     }
   }
 
@@ -246,20 +587,39 @@
     setTimeout(() => notification.remove(), 3000);
   }
 
-  async function handleFileUpload(event, pluginName) {
+  async function handleFileUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
 
     loading = true;
     try {
+      // Clear the graph before importing new data
+      await axios.post(`${API_BASE}/clear`);
+      
+      // Clear local state
+      graphData = { nodes: [], links: [] };
+      pathResult = null;
+      highlightedPath = null;
+      selectedNode = null;
+      selectedNodes = [];
+      queryFilter = null;
+      filteredNodes = null;
+      
+      // Clear cache
+      try {
+        await cacheManager.saveGraph({ nodes: [], links: [] });
+      } catch (cacheError) {
+        console.error('Failed to clear cache:', cacheError);
+      }
+      
       if (file.name.toLowerCase().endsWith('.zip') || file.type === 'application/zip' || file.type === 'application/x-zip-compressed') {
         const form = new FormData();
-        form.append('collector', pluginName);
         form.append('file', file);
-        const response = await axios.post(`${API_BASE}/import-zip`, form, {
+        const response = await axios.post(`${API_BASE}/import-zip-autodetect`, form, {
           headers: { 'Content-Type': 'multipart/form-data' }
         });
-        showNotification(`Import successful: ${response.data.result?.message || 'ZIP imported'}`, 'success');
+        const detectedPlugin = response.data.detected_plugin || 'unknown';
+        showNotification(`Import successful: ${response.data.result?.message || 'ZIP imported'} (detected: ${detectedPlugin})`, 'success');
       } else {
         const text = await file.text();
         let data;
@@ -268,17 +628,22 @@
         } catch {
           data = text;
         }
-        const response = await axios.post(`${API_BASE}/import`, {
-          collector: pluginName,
+        const response = await axios.post(`${API_BASE}/import-autodetect`, {
           data: data
         });
-        showNotification(`Import successful: ${response.data.result.message}`, 'success');
+        const detectedPlugin = response.data.detected_plugin || 'unknown';
+        showNotification(`Import successful: ${response.data.result.message} (detected: ${detectedPlugin})`, 'success');
       }
+      
+      // Load the new graph data
       await loadGraph();
+      updateGraph();
     } catch (error) {
       showNotification(`Import failed: ${error.response?.data?.error || error.message}`, 'error');
     } finally {
       loading = false;
+      // Reset file input so same file can be imported again
+      event.target.value = '';
     }
   }
 
@@ -423,16 +788,37 @@
       if (node.change_type === 'removed') return '#f44336';
       if (node.change_type === 'changed') return '#FF9800';
     }
+    
+    // Bloodweb-style colors - darker, more atmospheric
+    const level = node.level || 0;
     const colors = {
-      'Entity': '#4CAF50',
-      'Host': '#2196F3',
-      'ec2': '#FF9800',
-      'Resource': '#9C27B0',
-      'security-group': '#E91E63',
-      'vpc': '#00BCD4',
-      'default': '#607D8B'
+      'Entity': '#8B4513',      // Saddle brown
+      'Host': '#8B0000',        // Dark red
+      'IP': '#4B0082',          // Indigo
+      'Domain': '#2F4F4F',      // Dark slate gray
+      'ec2': '#B8860B',         // Dark goldenrod
+      'Resource': '#800080',    // Purple
+      'security-group': '#8B008B', // Dark magenta
+      'vpc': '#006400',         // Dark green
+      'Service': '#CD5C5C',     // Indian red
+      'Technology': '#9370DB',  // Medium purple
+      'Certificate': '#DAA520', // Goldenrod
+      'WAF': '#DC143C',         // Crimson
+      'Location': '#4682B4',    // Steel blue
+      'Organization': '#556B2F', // Dark olive green
+      'default': '#696969'      // Dim gray
     };
-    return colors[node.type] || colors['default'];
+    
+    const baseColor = colors[node.type] || colors['default'];
+    
+    // Darken nodes further from center (higher levels)
+    if (level > 0) {
+      const darkenFactor = Math.min(0.3, level * 0.05);
+      // Simple darkening by reducing RGB values
+      return baseColor; // Keep original for now, can enhance later
+    }
+    
+    return baseColor;
   }
 
   function linkColor(link) {
@@ -443,7 +829,19 @@
         return '#FFD700';
       }
     }
-    return 'rgba(255,255,255,0.2)';
+    
+    // Bloodweb-style links - darker, web-like
+    const sourceLevel = link.source?.level || 0;
+    const targetLevel = link.target?.level || 0;
+    const levelDiff = Math.abs(sourceLevel - targetLevel);
+    
+    // Darker links for connections between different levels (web-like)
+    if (levelDiff > 0) {
+      return `rgba(139, 0, 0, ${0.4 - levelDiff * 0.1})`; // Dark red, fading
+    }
+    
+    // Lighter links for same-level connections
+    return 'rgba(139, 69, 19, 0.3)'; // Saddle brown, subtle
   }
 
   function linkWidth(link) {
@@ -498,8 +896,8 @@
   });
 </script>
 
-<div class="app" class:graph-collapsed={graphCollapsed}>
-  <div class="sidebar">
+<div class="app" class:graph-collapsed={graphCollapsed} class:graph-fullscreen={graphFullscreen}>
+  <div class="sidebar" class:hidden={graphFullscreen}>
     <div class="sidebar-header" style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
       <div>
         <h1>WolfTrace</h1>
@@ -575,57 +973,23 @@
 
       <div class="sidebar-section">
         <h2>Import Data</h2>
-        <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px;">
-          <select
-            class="input-field"
-            bind:value={selectedImportPlugin}
-            style="margin: 0; width: 50%; padding: 6px 8px;"
-          >
-            {#each plugins as plugin}
-              <option value={plugin.name}>{plugin.name}</option>
-            {/each}
-          </select>
-          <Button
-            style="padding: 8px 12px; width: 50%; margin: 0;"
-            on:click={() => document.getElementById('file-import-generic')?.click()}
-            title="Choose JSON or ZIP to import"
-          >
-            Choose JSON/ZIP to Import
-          </Button>
-          <input
-            id="file-import-generic"
-            type="file"
-            accept=".json,application/json,.zip,application/zip,application/x-zip-compressed"
-            on:change={(e) => handleFileUpload(e, selectedImportPlugin)}
-            style="display: none;"
-          />
-        </div>
-        {#each plugins as plugin}
-          <div class="plugin-item">
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px;">
-              <div style="display: flex; flex-direction: column;">
-                <strong style="color: var(--text-0); text-transform: capitalize;">{plugin.name}</strong>
-                <small style="color: var(--text-2);">{plugin.description}</small>
-              </div>
-              <div>
-                <Button
-                  style="padding: 6px 10px; width: auto; margin-top: 0;"
-                  on:click={() => document.getElementById(`file-${plugin.name}`)?.click()}
-                  fullWidth={false}
-                >
-                  Import File
-                </Button>
-              </div>
-            </div>
-            <input
-              id={`file-${plugin.name}`}
-              type="file"
-              accept=".json,application/json,.zip,application/zip,application/x-zip-compressed"
-              on:change={(e) => handleFileUpload(e, plugin.name)}
-              style="display: none;"
-            />
-          </div>
-        {/each}
+        <p style="color: var(--text-2); font-size: 12px; margin-bottom: 10px;">
+          Choose a JSON or ZIP file to import. The system will automatically detect the appropriate format.
+        </p>
+        <Button
+          style="padding: 8px 12px; width: 100%; margin: 0;"
+          on:click={() => document.getElementById('file-import')?.click()}
+          title="Choose JSON or ZIP to import (format will be auto-detected)"
+        >
+          Choose File to Import
+        </Button>
+        <input
+          id="file-import"
+          type="file"
+          accept=".json,application/json,.zip,application/zip,application/x-zip-compressed"
+          on:change={handleFileUpload}
+          style="display: none;"
+        />
       </div>
 
       <div class="sidebar-section">
@@ -809,19 +1173,17 @@
     onClose={() => showShortcuts = false}
   />
 
-  <div class="graph-container" class:collapsed={graphCollapsed}>
+  <div class="graph-container" class:collapsed={graphCollapsed} class:fullscreen={graphFullscreen}>
     <div class="graph-inner">
       <div class="graph-toolbar">
         <Button
           variant="secondary"
-          ariaPressed={graphCollapsed}
-          ariaExpanded={!graphCollapsed}
-          title={graphCollapsed ? 'Expand Graph' : 'Collapse Graph'}
-          on:click={() => (graphCollapsed = !graphCollapsed)}
+          title={graphFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+          on:click={() => (graphFullscreen = !graphFullscreen)}
           style="padding: 6px 10px; font-size: 12px;"
           fullWidth={false}
         >
-          {graphCollapsed ? 'Show Graph' : 'Hide Graph'}
+          {graphFullscreen ? '⤓ Exit Fullscreen' : '⤢ Fullscreen'}
         </Button>
       </div>
       <div style="position: absolute; top: 10px; right: 10px; z-index: 1000;">
@@ -833,7 +1195,7 @@
       <div
         class="graph-surface"
         bind:this={graphContainer}
-        style="height: {graphCollapsed ? '0px' : ( (graphData?.nodes?.length || 0) + (graphData?.links?.length || 0) > 0 ? '100%' : '420px')}; opacity: {graphCollapsed ? 0 : 1};"
+        style="height: {graphCollapsed ? '0px' : '100%'}; opacity: {graphCollapsed ? 0 : 1};"
       >
         {#if !graphCollapsed && (graphData?.nodes?.length || 0) + (graphData?.links?.length || 0) === 0 && !loading}
           <div style="height: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-2);">

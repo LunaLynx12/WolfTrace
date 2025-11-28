@@ -36,21 +36,17 @@
 {:else if compact}
   <div class="graph-stats-widget compact">
     <div class="stat-mini">
-      <span class="stat-label">Nodes:</span>
-      <span class="stat-value">{graphData.nodes.length}</span>
+      <span class="stat-label">Nodes: <span class="stat-value">{graphData.nodes.length}</span></span>
     </div>
     <div class="stat-mini">
-      <span class="stat-label">Edges:</span>
-      <span class="stat-value">{graphData.links.length}</span>
+      <span class="stat-label">Edges: <span class="stat-value">{graphData.links.length}</span></span>
     </div>
     {#if stats && stats.basic}
       <div class="stat-mini">
-        <span class="stat-label">Components:</span>
-        <span class="stat-value">{stats.basic.connected_components || 0}</span>
+        <span class="stat-label">Components: <span class="stat-value">{stats.basic.connected_components || 0}</span></span>
       </div>
       <div class="stat-mini">
-        <span class="stat-label">Avg Degree:</span>
-        <span class="stat-value">{stats.basic.average_degree?.toFixed(1) || 0}</span>
+        <span class="stat-label">Avg Degree: <span class="stat-value">{stats.basic.average_degree?.toFixed(1) || 0}</span></span>
       </div>
     {/if}
   </div>
