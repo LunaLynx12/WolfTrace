@@ -99,11 +99,13 @@
       class="search-input"
       style="flex: 1;"
     />
-    <i
+    <button
+      type="button"
       class="bi bi-funnel icon-action"
       title="Toggle filters"
       on:click={() => (showFilters = !showFilters)}
-    ></i>
+      aria-label="Toggle filters"
+    ></button>
   </div>
 
   {#if showFilters}

@@ -108,7 +108,7 @@ class PluginManager:
             }
             for plugin in self.plugins.values()
         ]
-    
+
     def _has_nested_key(self, data: Any, key: str, max_depth: int = 3) -> bool:
         """Recursively check if a key exists in nested dict structure"""
         if max_depth <= 0:
