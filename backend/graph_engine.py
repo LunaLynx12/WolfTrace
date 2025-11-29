@@ -35,7 +35,7 @@ class GraphEngine:
             self.graph = nx.MultiDiGraph()
     
     def add_node(self, node_id: str, node_type: str, properties: Dict[str, Any] = None):
-        """Add a node to the graph"""
+        """Add a node to the graph, merging properties if node already exists"""
         if properties is None:
             properties = {}
         
@@ -45,7 +45,27 @@ class GraphEngine:
         if self.use_neo4j:
             self._add_node_neo4j(node_id, node_type, properties)
         else:
-            self.graph.add_node(node_id, **properties)
+            # Check if node already exists and merge properties
+            if self.graph.has_node(node_id):
+                existing_data = self.graph.nodes[node_id]
+                # Merge properties - lists are concatenated, dicts are merged, scalars are updated
+                merged_properties = dict(existing_data)
+                for key, value in properties.items():
+                    if key in merged_properties:
+                        # Merge lists
+                        if isinstance(merged_properties[key], list) and isinstance(value, list):
+                            merged_properties[key] = merged_properties[key] + value
+                        # Merge dicts
+                        elif isinstance(merged_properties[key], dict) and isinstance(value, dict):
+                            merged_properties[key] = {**merged_properties[key], **value}
+                        # Update scalar
+                        else:
+                            merged_properties[key] = value
+                    else:
+                        merged_properties[key] = value
+                self.graph.add_node(node_id, **merged_properties)
+            else:
+                self.graph.add_node(node_id, **properties)
     
     def add_edge(self, source: str, target: str, edge_type: str, properties: Dict[str, Any] = None):
         """Add an edge to the graph"""

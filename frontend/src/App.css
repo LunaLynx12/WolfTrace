@@ -75,6 +75,14 @@ html, body {
   align-content: start;
 }
 
+.app.graph-fullscreen .sidebar {
+  display: none;
+}
+
+.sidebar.hidden {
+  display: none;
+}
+
 .sidebar {
   width: 360px;
   background: rgba(17, 24, 39, 0.6);
@@ -281,6 +289,25 @@ html, body {
   padding: 0;
   overflow: hidden;
   display: none;
+}
+
+.graph-container.fullscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 9999;
+  padding: 0;
+  background: var(--bg-1);
+}
+
+.graph-container.fullscreen .graph-inner {
+  max-width: 100%;
+  height: 100%;
+  margin: 0;
 }
 
 .graph-inner {
@@ -914,12 +941,15 @@ html, body {
 .stat-mini .stat-label {
   color: var(--text-2);
   font-size: 11px;
+  line-height: 1.4;
 }
 
 .stat-mini .stat-value {
   color: var(--brand);
   font-weight: bold;
   font-size: 12px;
+  display: inline;
+  vertical-align: baseline;
 }
 
 .stat-grid-mini {

@@ -7,6 +7,7 @@ import os
 import io
 import json
 import zipfile
+import logging
 from dotenv import load_dotenv
 from graph_engine import GraphEngine
 from plugin_manager import PluginManager
@@ -21,6 +22,18 @@ from graph_templates import GraphTemplates
 from history_manager import HistoryManager
 
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('wolftrace.log')
+    ]
+)
+
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
@@ -189,6 +202,102 @@ def import_zip():
     except zipfile.BadZipFile:
         return jsonify({"error": "Invalid ZIP file"}), 400
     except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+@app.route('/api/import-autodetect', methods=['POST'])
+def import_autodetect():
+    """Import data with automatic plugin detection"""
+    try:
+        data = request.json
+        if not data:
+            logger.error("No JSON data received")
+            return jsonify({"error": "No data received"}), 400
+        
+        import_data = data.get('data')
+        
+        if not import_data:
+            logger.error("No 'data' field in request")
+            return jsonify({"error": "Data required"}), 400
+        
+        logger.info(f"Import autodetect: Received data with keys: {list(import_data.keys())[:10] if isinstance(import_data, dict) else 'non-dict'}")
+        
+        # Detect which plugin can handle this data
+        detected_plugin = plugin_manager.detect_plugin(import_data)
+        logger.info(f"Detected plugin: {detected_plugin}")
+        
+        if not detected_plugin:
+            logger.warning("Could not detect plugin for data format")
+            return jsonify({"error": "Could not detect appropriate plugin for this data format"}), 400
+        
+        logger.info(f"Processing data with plugin: {detected_plugin}")
+        result = plugin_manager.process_data(detected_plugin, import_data, graph_engine)
+        logger.info(f"Processing complete: {result.get('nodes_added', 0)} nodes, {result.get('edges_added', 0)} edges")
+        
+        history_manager.save_state(graph_engine.get_full_graph(), f"Import data via {detected_plugin} (autodetected)")
+        return jsonify({
+            **result,
+            'detected_plugin': detected_plugin
+        })
+    except Exception as e:
+        logger.error(f"Error in import-autodetect: {str(e)}", exc_info=True)
+        return jsonify({"error": str(e)}), 400
+
+@app.route('/api/import-zip-autodetect', methods=['POST'])
+def import_zip_autodetect():
+    """Import ZIP archive with automatic plugin detection"""
+    file = request.files.get('file')
+
+    if not file:
+        logger.error("No file received in ZIP import request")
+        return jsonify({"error": "ZIP file required (multipart/form-data with 'file')"}), 400
+
+    try:
+        logger.info(f"Processing ZIP file: {file.filename}")
+        merged = None
+        json_files = []
+        with zipfile.ZipFile(file.stream) as zf:
+            for name in zf.namelist():
+                if name.lower().endswith('.json'):
+                    json_files.append(name)
+                    with zf.open(name) as f:
+                        try:
+                            data = json.load(f)
+                            logger.info(f"Loaded JSON file: {name} (keys: {list(data.keys())[:10] if isinstance(data, dict) else 'non-dict'})")
+                            merged = _merge_json_objects(merged, data)
+                        except Exception as e:
+                            logger.warning(f"Skipping invalid JSON file {name}: {str(e)}")
+                            continue
+        
+        logger.info(f"Found {len(json_files)} JSON files in ZIP: {json_files}")
+        
+        if merged is None:
+            logger.error("No valid JSON files found in archive")
+            return jsonify({"error": "No valid JSON files found in archive"}), 400
+
+        logger.info(f"Merged data keys: {list(merged.keys())[:20]}")
+        
+        # Detect which plugin can handle this data
+        detected_plugin = plugin_manager.detect_plugin(merged)
+        logger.info(f"Detected plugin: {detected_plugin}")
+        
+        if not detected_plugin:
+            logger.warning("Could not detect plugin for merged ZIP data")
+            return jsonify({"error": "Could not detect appropriate plugin for this data format"}), 400
+
+        logger.info(f"Processing merged data with plugin: {detected_plugin}")
+        result = plugin_manager.process_data(detected_plugin, merged, graph_engine)
+        logger.info(f"Processing complete: {result.get('nodes_added', 0)} nodes, {result.get('edges_added', 0)} edges")
+        
+        history_manager.save_state(graph_engine.get_full_graph(), f"Import ZIP via {detected_plugin} (autodetected)")
+        return jsonify({
+            **result,
+            'detected_plugin': detected_plugin
+        })
+    except zipfile.BadZipFile as e:
+        logger.error(f"Invalid ZIP file: {str(e)}")
+        return jsonify({"error": "Invalid ZIP file"}), 400
+    except Exception as e:
+        logger.error(f"Error in import-zip-autodetect: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 400
 
 @app.route('/api/clear', methods=['POST'])
