@@ -362,7 +362,7 @@ def import_zip_autodetect():
                             logger.debug(
                                 f"Loaded JSON file: {name}",
                                 extra={
-                                    'filename': name,
+                                    'file_name': name,
                                     'keys': data_keys if isinstance(data_keys, list) else str(data_keys),
                                     'size': file_size
                                 }
@@ -371,14 +371,14 @@ def import_zip_autodetect():
                         except Exception as e:
                             logger.warning(
                                 f"Skipping invalid JSON file: {name}",
-                                extra={'filename': name, 'error': str(e)}
+                                extra={'file_name': name, 'error': str(e)}
                             )
                             continue
         
         logger.info(
             f"Import ZIP autodetect: Processed {len(json_files)} JSON files",
             extra={
-                'filename': file.filename,
+                'file_name': file.filename,
                 'json_files_count': len(json_files),
                 'total_size': total_size,
                 'json_files': json_files
@@ -412,7 +412,7 @@ def import_zip_autodetect():
         logger.info(
             f"Import ZIP autodetect: Successfully processed",
             extra={
-                'filename': file.filename,
+                'file_name': file.filename,
                 'plugin': detected_plugin,
                 'nodes_added': nodes_added,
                 'edges_added': edges_added,
@@ -432,7 +432,7 @@ def import_zip_autodetect():
     except zipfile.BadZipFile as e:
         logger.error(
             f"Import ZIP autodetect: Invalid ZIP file - {str(e)}",
-            extra={'filename': file.filename if file else 'unknown'}
+            extra={'file_name': file.filename if file else 'unknown'}
         )
         return jsonify({"error": "Invalid ZIP file"}), 400
     except Exception as e:
@@ -440,7 +440,7 @@ def import_zip_autodetect():
             f"Import ZIP autodetect: Error processing ZIP - {str(e)}",
             exc_info=True,
             extra={
-                'filename': file.filename if file else 'unknown',
+                'file_name': file.filename if file else 'unknown',
                 'error_type': type(e).__name__
             }
         )
@@ -850,13 +850,11 @@ def openapi_spec():
     return jsonify(spec)
 
 # Swagger UI endpoint (manual implementation)
-@app.route(SWAGGER_URL)
-@app.route(f'{SWAGGER_URL}/<path:path>')
-def swagger_ui(path=''):
+@app.route('/docs', methods=['GET'])
+@app.route('/docs/', methods=['GET'])
+def swagger_ui():
     """Swagger UI documentation"""
-    if path:
-        return '', 404
-    return f'''
+    html_content = f'''
 <!DOCTYPE html>
 <html>
 <head>
@@ -901,6 +899,7 @@ def swagger_ui(path=''):
 </body>
 </html>
         '''
+    return html_content, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 # ReDoc endpoint
 @app.route(REDOC_URL)
