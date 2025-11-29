@@ -370,40 +370,40 @@ def process_standard(data: Dict[str, Any], graph_engine) -> Dict[str, Any]:
     nodes_added = 0
     edges_added = 0
     
-    # Process hosts
-    hosts = data.get('hosts', [])
-    for host in hosts:
-        host_id = host.get('ip') or host.get('hostname')
-        if host_id:
-            graph_engine.add_node(
-                host_id,
-                'Host',
-                {
-                    'ip': host.get('ip'),
-                    'hostname': host.get('hostname'),
-                    'ports': host.get('ports', []),
-                    **host.get('properties', {})
-                }
-            )
-            nodes_added += 1
-    
-    # Process connections
-    connections = data.get('connections', [])
-    for conn in connections:
-        source = conn.get('source')
-        target = conn.get('target')
-        if source and target:
-            graph_engine.add_edge(
-                source,
-                target,
-                'CONNECTS_TO',
-                {
-                    'protocol': conn.get('protocol', 'tcp'),
-                    'port': conn.get('port'),
-                    **conn.get('properties', {})
-                }
-            )
-            edges_added += 1
+        # Process hosts
+        hosts = data.get('hosts', [])
+        for host in hosts:
+            host_id = host.get('ip') or host.get('hostname')
+            if host_id:
+                graph_engine.add_node(
+                    host_id,
+                    'Host',
+                    {
+                        'ip': host.get('ip'),
+                        'hostname': host.get('hostname'),
+                        'ports': host.get('ports', []),
+                        **host.get('properties', {})
+                    }
+                )
+                nodes_added += 1
+        
+        # Process connections
+        connections = data.get('connections', [])
+        for conn in connections:
+            source = conn.get('source')
+            target = conn.get('target')
+            if source and target:
+                graph_engine.add_edge(
+                    source,
+                    target,
+                    'CONNECTS_TO',
+                    {
+                        'protocol': conn.get('protocol', 'tcp'),
+                        'port': conn.get('port'),
+                        **conn.get('properties', {})
+                    }
+                )
+                edges_added += 1
     
     return {'nodes_added': nodes_added, 'edges_added': edges_added}
 

@@ -45,6 +45,7 @@
   let graphCollapsed = false;
   let graphFullscreen = false;
   let resizeObserver = null;
+  let menuOpen = false;
 
   let initialLoaded = false;
 
@@ -897,37 +898,136 @@
 </script>
 
 <div class="app" class:graph-collapsed={graphCollapsed} class:graph-fullscreen={graphFullscreen}>
-  <div class="sidebar" class:hidden={graphFullscreen}>
-    <div class="sidebar-header" style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
-      <div>
-        <h1>WolfTrace</h1>
-        <p class="subtitle">Modular Graph Visualization</p>
+  {#if !graphFullscreen && !graphCollapsed}
+    <button
+      type="button"
+      class="hamburger-toggle"
+      class:active={menuOpen}
+      title="Menu"
+      aria-label="Toggle menu"
+      on:click={() => (menuOpen = !menuOpen)}
+      on:keydown={(e) => e.key === 'Escape' && (menuOpen = false)}
+    >
+      <span></span>
+      <span></span>
+      <span></span>
+    </button>
+  {/if}
+  
+  <div class="sidebar" class:hidden={graphFullscreen} class:menu-open={menuOpen}>
+    {#if !graphFullscreen && !graphCollapsed}
+      <!-- Menu View - Always in DOM for animation -->
+      <div class="sidebar-menu">
+        <div class="sidebar-menu-header">
+          <h2>Menu</h2>
+        </div>
+        <div class="view-menu" role="menu">
+          <button
+            type="button"
+            class="menu-item"
+            class:active={activeView === 'graph'}
+            on:click={() => { activeView = 'graph'; menuOpen = false; }}
+          >
+            Graph
+          </button>
+          <button
+            type="button"
+            class="menu-item"
+            class:active={activeView === 'analytics'}
+            on:click={() => { activeView = 'analytics'; menuOpen = false; }}
+          >
+            Analytics
+          </button>
+          <button
+            type="button"
+            class="menu-item"
+            class:active={activeView === 'query'}
+            on:click={() => { activeView = 'query'; menuOpen = false; }}
+          >
+            Query
+          </button>
+          <button
+            type="button"
+            class="menu-item"
+            class:active={activeView === 'sessions'}
+            on:click={() => { activeView = 'sessions'; menuOpen = false; }}
+          >
+            Sessions
+          </button>
+          <button
+            type="button"
+            class="menu-item"
+            class:active={activeView === 'compare'}
+            on:click={() => { activeView = 'compare'; menuOpen = false; }}
+          >
+            Compare
+          </button>
+          <button
+            type="button"
+            class="menu-item"
+            class:active={activeView === 'bulk'}
+            on:click={() => { activeView = 'bulk'; menuOpen = false; }}
+          >
+            Bulk
+          </button>
+          <button
+            type="button"
+            class="menu-item"
+            class:active={activeView === 'templates'}
+            on:click={() => { activeView = 'templates'; menuOpen = false; }}
+          >
+            Templates
+          </button>
+          <button
+            type="button"
+            class="menu-item"
+            class:active={activeView === 'report'}
+            on:click={() => { activeView = 'report'; menuOpen = false; }}
+          >
+            Report
+          </button>
+        </div>
       </div>
-      <Button
-        variant="secondary"
-        ariaPressed={graphCollapsed}
-        ariaExpanded={!graphCollapsed}
-        title={graphCollapsed ? 'Expand Graph Area' : 'Collapse Graph Area'}
-        on:click={() => (graphCollapsed = !graphCollapsed)}
-        style="padding: 6px 10px; font-size: 12px; white-space: nowrap;"
-        fullWidth={false}
-      >
-        {graphCollapsed ? 'Show Graph' : 'Hide Graph'}
-      </Button>
-    </div>
+    {/if}
 
-    <div class="view-tabs" role="tablist" aria-label="Views">
-      <TabButton active={activeView === 'graph'} onClick={() => activeView = 'graph'} title="Graph">Graph</TabButton>
-      <TabButton active={activeView === 'analytics'} onClick={() => activeView = 'analytics'} title="Analytics">Analytics</TabButton>
-      <TabButton active={activeView === 'query'} onClick={() => activeView = 'query'} title="Query">Query</TabButton>
-      <TabButton active={activeView === 'sessions'} onClick={() => activeView = 'sessions'} title="Sessions">Sessions</TabButton>
-      <TabButton active={activeView === 'compare'} onClick={() => activeView = 'compare'} title="Compare">Compare</TabButton>
-      <TabButton active={activeView === 'bulk'} onClick={() => activeView = 'bulk'} title="Bulk">Bulk</TabButton>
-      <TabButton active={activeView === 'templates'} onClick={() => activeView = 'templates'} title="Templates">Templates</TabButton>
-      <TabButton active={activeView === 'report'} onClick={() => activeView = 'report'} title="Report">Report</TabButton>
-    </div>
+    {#if !menuOpen || graphFullscreen || graphCollapsed}
+      <!-- Normal Sidebar View -->
+      <div class="sidebar-header">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: var(--space-1);">
+          <div>
+            <h1>WolfTrace</h1>
+            <p class="subtitle">Modular Graph Visualization</p>
+          </div>
+          <Button
+            variant="secondary"
+            ariaPressed={graphCollapsed}
+            ariaExpanded={!graphCollapsed}
+            title={graphCollapsed ? 'Expand Graph Area' : 'Collapse Graph Area'}
+            on:click={() => (graphCollapsed = !graphCollapsed)}
+            style="padding: 6px 10px; font-size: 12px; white-space: nowrap;"
+            fullWidth={false}
+          >
+            {graphCollapsed ? 'Show Graph' : 'Hide Graph'}
+          </Button>
+        </div>
 
-    <div class="sidebar-section" style="padding: 10px 0; border-bottom: 1px solid #444;">
+        {#if graphFullscreen || graphCollapsed}
+          <div class="view-tabs" role="tablist" aria-label="Views">
+            <TabButton active={activeView === 'graph'} onClick={() => activeView = 'graph'} title="Graph">Graph</TabButton>
+            <TabButton active={activeView === 'analytics'} onClick={() => activeView = 'analytics'} title="Analytics">Analytics</TabButton>
+            <TabButton active={activeView === 'query'} onClick={() => activeView = 'query'} title="Query">Query</TabButton>
+            <TabButton active={activeView === 'sessions'} onClick={() => activeView = 'sessions'} title="Sessions">Sessions</TabButton>
+            <TabButton active={activeView === 'compare'} onClick={() => activeView = 'compare'} title="Compare">Compare</TabButton>
+            <TabButton active={activeView === 'bulk'} onClick={() => activeView = 'bulk'} title="Bulk">Bulk</TabButton>
+            <TabButton active={activeView === 'templates'} onClick={() => activeView = 'templates'} title="Templates">Templates</TabButton>
+            <TabButton active={activeView === 'report'} onClick={() => activeView = 'report'} title="Report">Report</TabButton>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    {#if !menuOpen || graphFullscreen || graphCollapsed}
+      <div class="sidebar-section">
       <HistoryControls onHistoryChange={(graph) => {
         if (graph) {
           graphData = {
@@ -945,11 +1045,13 @@
       <div class="sidebar-section">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
           <h2 style="margin: 0;">Search</h2>
-          <i
+          <button
+            type="button"
             class="bi bi-keyboard icon-action"
             title="Keyboard shortcuts"
             on:click={() => (showShortcuts = true)}
-          ></i>
+            aria-label="Show keyboard shortcuts"
+          ></button>
         </div>
         <SearchBar 
           onNodeSelect={(node) => selectedNode = node}
@@ -1165,6 +1267,7 @@
 
     {#if activeView === 'report'}
       <ReportGenerator />
+    {/if}
     {/if}
   </div>
 

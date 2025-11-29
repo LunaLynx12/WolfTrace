@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import axios from 'axios';
+  import Button from './ui/Button.svelte';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -59,31 +60,33 @@
   }
 </script>
 
-<div class="history-controls">
-  <div style="display: flex; gap: 5px; align-items: center;">
-    <button
-      on:click={handleUndo}
-      disabled={!historyInfo?.can_undo || loading}
-      class="btn-secondary"
-      style="flex: 1; padding: 8px; font-size: 12px;"
-      title="Undo (Ctrl+Z)"
-    >
-      ↶ Undo
-    </button>
-    <button
-      on:click={handleRedo}
-      disabled={!historyInfo?.can_redo || loading}
-      class="btn-secondary"
-      style="flex: 1; padding: 8px; font-size: 12px;"
-      title="Redo (Ctrl+Y)"
-    >
-      ↷ Redo
-    </button>
-  </div>
-  {#if historyInfo}
-    <small style="display: block; margin-top: 5px; color: #888; font-size: 11px;">
-      {historyInfo.undo_count} undo, {historyInfo.redo_count} redo
-    </small>
-  {/if}
+<div style="display: flex; gap: 5px; align-items: center;">
+  <Button
+    disabled={!historyInfo?.can_undo || loading}
+    title="Undo (Ctrl+Z)"
+    style="flex: 1; padding: 8px 12px; margin: 0;"
+    on:click={handleUndo}
+  >
+    ↶ Undo
+  </Button>
+  <Button
+    disabled={!historyInfo?.can_redo || loading}
+    title="Redo (Ctrl+Y)"
+    style="flex: 1; padding: 8px 12px; margin: 0;"
+    on:click={handleRedo}
+  >
+    ↷ Redo
+  </Button>
 </div>
+{#if historyInfo}
+  <small style="display: block; margin-top: 5px; color: var(--text-2); font-size: 11px;">
+    {historyInfo.undo_count} undo, {historyInfo.redo_count} redo
+  </small>
+{/if}
+
+<style>
+  :global(.sidebar-section) :global(.uiv-btn.btn-primary) {
+    padding: 8px 12px !important;
+  }
+</style>
 
