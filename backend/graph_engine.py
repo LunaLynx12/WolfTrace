@@ -34,13 +34,24 @@ class GraphEngine:
             self.use_neo4j = False
             self.graph = nx.MultiDiGraph()
     
-    def add_node(self, node_id: str, node_type: str, properties: Dict[str, Any] = None):
-        """Add a node to the graph, merging properties if node already exists"""
-        if properties is None:
+    def add_node(self, node_id: str, node_type: str = None, properties: Dict[str, Any] = None):
+        """Add a node to the graph, merging properties if node already exists
+        
+        Args:
+            node_id: Node identifier
+            node_type: Node type (optional, can be in properties)
+            properties: Node properties dict (optional)
+        """
+        # Handle case where node_type is passed as a dict (backward compatibility)
+        if isinstance(node_type, dict):
+            properties = node_type
+            node_type = properties.get('type', None)
+        elif properties is None:
             properties = {}
         
         properties['id'] = node_id
-        properties['type'] = node_type
+        if node_type:
+            properties['type'] = node_type
         
         if self.use_neo4j:
             self._add_node_neo4j(node_id, node_type, properties)
@@ -67,16 +78,31 @@ class GraphEngine:
             else:
                 self.graph.add_node(node_id, **properties)
     
-    def add_edge(self, source: str, target: str, edge_type: str, properties: Dict[str, Any] = None):
-        """Add an edge to the graph"""
+    def add_edge(self, source: str, target: str, edge_type: str = None, properties: Dict[str, Any] = None):
+        """Add an edge to the graph
+        
+        Args:
+            source: Source node ID
+            target: Target node ID
+            edge_type: Edge type (optional, can be in properties)
+            properties: Edge properties dict (optional)
+        """
         if properties is None:
             properties = {}
+        
+        # Handle case where edge_type is passed as a dict (backward compatibility)
+        if isinstance(edge_type, dict):
+            properties = edge_type
+            edge_type = properties.get('type', 'RELATED_TO')
+        elif edge_type is None:
+            edge_type = properties.get('type', 'RELATED_TO')
         
         properties['type'] = edge_type
         
         if self.use_neo4j:
             self._add_edge_neo4j(source, target, edge_type, properties)
         else:
+            # For NetworkX MultiDiGraph, use edge_type as key for multi-edges
             self.graph.add_edge(source, target, key=edge_type, **properties)
     
     def get_nodes(self, node_type: Optional[str] = None) -> List[Dict]:

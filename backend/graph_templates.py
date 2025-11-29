@@ -6,13 +6,17 @@ import json
 from pathlib import Path
 
 class GraphTemplates:
-    def __init__(self, templates_dir: str = 'data/templates'):
+    def __init__(self, templates_dir: str = None):
         """
         Initialize template manager
         
         Args:
-            templates_dir: Directory containing template files
+            templates_dir: Directory containing template files (default: backend/data/templates)
         """
+        if templates_dir is None:
+            # Default to backend/data/templates relative to this file
+            backend_dir = Path(__file__).resolve().parent
+            templates_dir = str(backend_dir / 'data' / 'templates')
         self.templates_dir = Path(templates_dir)
         self.templates_dir.mkdir(parents=True, exist_ok=True)
         self.templates = {}

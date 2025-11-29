@@ -1,13 +1,14 @@
 """
 WolfTrace Backend - Main API Server
 """
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, g
 from flask_cors import CORS
 import os
 import io
 import json
 import zipfile
 import logging
+import time
 from dotenv import load_dotenv
 from graph_engine import GraphEngine
 from plugin_manager import PluginManager
@@ -20,27 +21,82 @@ from report_generator import ReportGenerator
 from bulk_operations import BulkOperations
 from graph_templates import GraphTemplates
 from history_manager import HistoryManager
+from openapi_spec import generate_openapi_spec
+from logger_config import setup_logging, get_logger, log_request_response, log_performance
 
 load_dotenv()
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('wolftrace.log')
-    ]
+# Configure advanced logging system
+logger = setup_logging(
+    log_level=os.getenv('LOG_LEVEL', 'INFO'),
+    enable_json=os.getenv('LOG_JSON', 'false').lower() == 'true',
+    enable_access_log=True
 )
-
-logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
 
+# Request logging middleware
+@app.before_request
+def log_request_info():
+    """Log incoming requests"""
+    g.start_time = time.time()
+    logger.debug(
+        f"Incoming request: {request.method} {request.path}",
+        extra={
+            'method': request.method,
+            'path': request.path,
+            'ip': request.remote_addr,
+            'user_agent': request.headers.get('User-Agent', 'Unknown'),
+            'content_type': request.content_type
+        }
+    )
+
+@app.after_request
+def log_response_info(response):
+    """Log outgoing responses"""
+    duration = time.time() - g.get('start_time', 0)
+    access_logger = logging.getLogger('wolftrace.access')
+    
+    access_logger.info(
+        f"{request.method} {request.path}",
+        extra={
+            'method': request.method,
+            'path': request.path,
+            'status': response.status_code,
+            'duration': duration,
+            'ip': request.remote_addr,
+            'response_size': len(response.get_data())
+        }
+    )
+    
+    # Log slow requests
+    if duration > 1.0:
+        logger.warning(
+            f"Slow request: {request.method} {request.path} took {duration:.3f}s",
+            extra={'duration': duration, 'path': request.path}
+        )
+    
+    return response
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Global exception handler with logging"""
+    logger.error(
+        f"Unhandled exception: {str(e)}",
+        extra={
+            'path': request.path,
+            'method': request.method,
+            'ip': request.remote_addr
+        },
+        exc_info=True
+    )
+    return jsonify({"error": "Internal server error"}), 500
+
 # Initialize components
 graph_engine = GraphEngine()
-plugins_path = str((Path(__file__).resolve().parent.parent / 'plugins').resolve())
+# Plugins are now in backend/plugins directory
+plugins_path = str((Path(__file__).resolve().parent / 'plugins').resolve())
 plugin_manager = PluginManager(plugins_dir=plugins_path)
 analytics = GraphAnalytics(graph_engine)
 session_manager = SessionManager()
@@ -80,7 +136,10 @@ def api_root():
     })
 
 @app.route('/api/health', methods=['GET'])
+@log_request_response
 def health():
+    """Health check endpoint"""
+    logger.debug("Health check requested")
     return jsonify({"status": "ok"})
 
 @app.route('/api/nodes', methods=['GET'])
@@ -124,6 +183,7 @@ def list_plugins():
     return jsonify(plugins)
 
 @app.route('/api/import', methods=['POST'])
+@log_performance("import_data")
 def import_data():
     """Import data via plugin"""
     data = request.json
@@ -131,16 +191,23 @@ def import_data():
     import_data = data.get('data')
     
     if not collector:
+        logger.warning("Import request missing collector name")
         return jsonify({"error": "Collector name required"}), 400
     
     if not import_data:
+        logger.warning("Import request missing data")
         return jsonify({"error": "Data required"}), 400
     
     try:
+        logger.info(f"Importing data with plugin: {collector}")
         result = plugin_manager.process_data(collector, import_data, graph_engine)
+        nodes_added = result.get('nodes_added', 0)
+        edges_added = result.get('edges_added', 0)
+        logger.info(f"Import successful: {nodes_added} nodes, {edges_added} edges added")
         history_manager.save_state(graph_engine.get_full_graph(), f"Import data via {collector}")
         return jsonify(result)
     except Exception as e:
+        logger.error(f"Import failed with plugin {collector}: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 400
 
 def _merge_json_objects(acc, obj):
@@ -205,56 +272,83 @@ def import_zip():
         return jsonify({"error": str(e)}), 400
 
 @app.route('/api/import-autodetect', methods=['POST'])
+@log_performance("import_autodetect")
 def import_autodetect():
     """Import data with automatic plugin detection"""
     try:
         data = request.json
         if not data:
-            logger.error("No JSON data received")
+            logger.error("Import autodetect: No JSON data received")
             return jsonify({"error": "No data received"}), 400
         
         import_data = data.get('data')
         
         if not import_data:
-            logger.error("No 'data' field in request")
+            logger.error("Import autodetect: No 'data' field in request")
             return jsonify({"error": "Data required"}), 400
         
-        logger.info(f"Import autodetect: Received data with keys: {list(import_data.keys())[:10] if isinstance(import_data, dict) else 'non-dict'}")
+        data_keys = list(import_data.keys())[:10] if isinstance(import_data, dict) else 'non-dict'
+        logger.info(f"Import autodetect: Analyzing data structure (keys: {data_keys})")
         
         # Detect which plugin can handle this data
         detected_plugin = plugin_manager.detect_plugin(import_data)
-        logger.info(f"Detected plugin: {detected_plugin}")
         
         if not detected_plugin:
-            logger.warning("Could not detect plugin for data format")
+            logger.warning(
+                "Import autodetect: Could not detect plugin for data format",
+                extra={'data_keys': data_keys if isinstance(data_keys, list) else str(data_keys)}
+            )
             return jsonify({"error": "Could not detect appropriate plugin for this data format"}), 400
         
-        logger.info(f"Processing data with plugin: {detected_plugin}")
-        result = plugin_manager.process_data(detected_plugin, import_data, graph_engine)
-        logger.info(f"Processing complete: {result.get('nodes_added', 0)} nodes, {result.get('edges_added', 0)} edges")
+        logger.info(f"Import autodetect: Detected plugin '{detected_plugin}' for data")
         
-        history_manager.save_state(graph_engine.get_full_graph(), f"Import data via {detected_plugin} (autodetected)")
+        # Process with detected plugin
+        result = plugin_manager.process_data(detected_plugin, import_data, graph_engine)
+        nodes_added = result.get('nodes_added', 0)
+        edges_added = result.get('edges_added', 0)
+        
+        logger.info(
+            f"Import autodetect: Successfully processed with '{detected_plugin}'",
+            extra={
+                'plugin': detected_plugin,
+                'nodes_added': nodes_added,
+                'edges_added': edges_added
+            }
+        )
+        
+        history_manager.save_state(
+            graph_engine.get_full_graph(),
+            f"Import data via {detected_plugin} (autodetected)"
+        )
+        
         return jsonify({
             **result,
             'detected_plugin': detected_plugin
         })
     except Exception as e:
-        logger.error(f"Error in import-autodetect: {str(e)}", exc_info=True)
+        logger.error(
+            f"Import autodetect: Error processing data - {str(e)}",
+            exc_info=True,
+            extra={'error_type': type(e).__name__}
+        )
         return jsonify({"error": str(e)}), 400
 
 @app.route('/api/import-zip-autodetect', methods=['POST'])
+@log_performance("import_zip_autodetect")
 def import_zip_autodetect():
     """Import ZIP archive with automatic plugin detection"""
     file = request.files.get('file')
 
     if not file:
-        logger.error("No file received in ZIP import request")
+        logger.error("Import ZIP autodetect: No file received in request")
         return jsonify({"error": "ZIP file required (multipart/form-data with 'file')"}), 400
 
     try:
-        logger.info(f"Processing ZIP file: {file.filename}")
+        logger.info(f"Import ZIP autodetect: Processing file '{file.filename}'")
         merged = None
         json_files = []
+        total_size = 0
+        
         with zipfile.ZipFile(file.stream) as zf:
             for name in zf.namelist():
                 if name.lower().endswith('.json'):
@@ -262,42 +356,94 @@ def import_zip_autodetect():
                     with zf.open(name) as f:
                         try:
                             data = json.load(f)
-                            logger.info(f"Loaded JSON file: {name} (keys: {list(data.keys())[:10] if isinstance(data, dict) else 'non-dict'})")
+                            file_size = len(json.dumps(data))
+                            total_size += file_size
+                            data_keys = list(data.keys())[:10] if isinstance(data, dict) else 'non-dict'
+                            logger.debug(
+                                f"Loaded JSON file: {name}",
+                                extra={
+                                    'filename': name,
+                                    'keys': data_keys if isinstance(data_keys, list) else str(data_keys),
+                                    'size': file_size
+                                }
+                            )
                             merged = _merge_json_objects(merged, data)
                         except Exception as e:
-                            logger.warning(f"Skipping invalid JSON file {name}: {str(e)}")
+                            logger.warning(
+                                f"Skipping invalid JSON file: {name}",
+                                extra={'filename': name, 'error': str(e)}
+                            )
                             continue
         
-        logger.info(f"Found {len(json_files)} JSON files in ZIP: {json_files}")
+        logger.info(
+            f"Import ZIP autodetect: Processed {len(json_files)} JSON files",
+            extra={
+                'filename': file.filename,
+                'json_files_count': len(json_files),
+                'total_size': total_size,
+                'json_files': json_files
+            }
+        )
         
         if merged is None:
-            logger.error("No valid JSON files found in archive")
+            logger.error("Import ZIP autodetect: No valid JSON files found in archive")
             return jsonify({"error": "No valid JSON files found in archive"}), 400
 
-        logger.info(f"Merged data keys: {list(merged.keys())[:20]}")
+        merged_keys = list(merged.keys())[:20]
+        logger.debug(f"Import ZIP autodetect: Merged data structure (keys: {merged_keys})")
         
         # Detect which plugin can handle this data
         detected_plugin = plugin_manager.detect_plugin(merged)
-        logger.info(f"Detected plugin: {detected_plugin}")
         
         if not detected_plugin:
-            logger.warning("Could not detect plugin for merged ZIP data")
+            logger.warning(
+                "Import ZIP autodetect: Could not detect plugin for merged data",
+                extra={'merged_keys': merged_keys}
+            )
             return jsonify({"error": "Could not detect appropriate plugin for this data format"}), 400
 
-        logger.info(f"Processing merged data with plugin: {detected_plugin}")
-        result = plugin_manager.process_data(detected_plugin, merged, graph_engine)
-        logger.info(f"Processing complete: {result.get('nodes_added', 0)} nodes, {result.get('edges_added', 0)} edges")
+        logger.info(f"Import ZIP autodetect: Detected plugin '{detected_plugin}'")
         
-        history_manager.save_state(graph_engine.get_full_graph(), f"Import ZIP via {detected_plugin} (autodetected)")
+        # Process with detected plugin
+        result = plugin_manager.process_data(detected_plugin, merged, graph_engine)
+        nodes_added = result.get('nodes_added', 0)
+        edges_added = result.get('edges_added', 0)
+        
+        logger.info(
+            f"Import ZIP autodetect: Successfully processed",
+            extra={
+                'filename': file.filename,
+                'plugin': detected_plugin,
+                'nodes_added': nodes_added,
+                'edges_added': edges_added,
+                'files_processed': len(json_files)
+            }
+        )
+        
+        history_manager.save_state(
+            graph_engine.get_full_graph(),
+            f"Import ZIP via {detected_plugin} (autodetected)"
+        )
+        
         return jsonify({
             **result,
             'detected_plugin': detected_plugin
         })
     except zipfile.BadZipFile as e:
-        logger.error(f"Invalid ZIP file: {str(e)}")
+        logger.error(
+            f"Import ZIP autodetect: Invalid ZIP file - {str(e)}",
+            extra={'filename': file.filename if file else 'unknown'}
+        )
         return jsonify({"error": "Invalid ZIP file"}), 400
     except Exception as e:
-        logger.error(f"Error in import-zip-autodetect: {str(e)}", exc_info=True)
+        logger.error(
+            f"Import ZIP autodetect: Error processing ZIP - {str(e)}",
+            exc_info=True,
+            extra={
+                'filename': file.filename if file else 'unknown',
+                'error_type': type(e).__name__
+            }
+        )
         return jsonify({"error": str(e)}), 400
 
 @app.route('/api/clear', methods=['POST'])
@@ -698,151 +844,9 @@ REDOC_URL = '/redoc'
 # Generate OpenAPI spec
 @app.route('/openapi.json', methods=['GET'])
 def openapi_spec():
-    """OpenAPI 3.0 specification"""
-    spec = {
-        "openapi": "3.0.0",
-        "info": {
-            "title": "WolfTrace API",
-            "version": "1.0.0",
-            "description": "WolfTrace - Modular Graph Visualization API"
-        },
-        "servers": [
-            {
-                "url": "http://localhost:5000",
-                "description": "Development server"
-            }
-        ],
-        "paths": {
-            "/api": {
-                "get": {
-                    "summary": "API Root",
-                    "description": "List all available endpoints",
-                    "responses": {
-                        "200": {
-                            "description": "Success",
-                            "content": {
-                                "application/json": {
-                                    "schema": {"type": "object"}
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            "/api/health": {
-                "get": {
-                    "summary": "Health Check",
-                    "description": "Check API health status",
-                    "responses": {
-                        "200": {
-                            "description": "API is healthy",
-                            "content": {
-                                "application/json": {
-                                    "schema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "status": {"type": "string", "example": "ok"}
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            "/api/plugins": {
-                "get": {
-                    "summary": "List Plugins",
-                    "description": "Get list of available plugins",
-                    "responses": {
-                        "200": {
-                            "description": "List of plugins",
-                            "content": {
-                                "application/json": {
-                                    "schema": {
-                                        "type": "array",
-                                        "items": {"type": "object"}
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            "/api/graph": {
-                "get": {
-                    "summary": "Get Graph",
-                    "description": "Get full graph data",
-                    "responses": {
-                        "200": {
-                            "description": "Graph data",
-                            "content": {
-                                "application/json": {
-                                    "schema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "nodes": {"type": "array"},
-                                            "edges": {"type": "array"}
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            "/api/import": {
-                "post": {
-                    "summary": "Import Data",
-                    "description": "Import data via plugin",
-                    "requestBody": {
-                        "required": True,
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "required": ["collector", "data"],
-                                    "properties": {
-                                        "collector": {
-                                            "type": "string",
-                                            "description": "Plugin/collector name"
-                                        },
-                                        "data": {
-                                            "type": "object",
-                                            "description": "Data to import"
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    "responses": {
-                        "200": {
-                            "description": "Import successful",
-                            "content": {
-                                "application/json": {
-                                    "schema": {"type": "object"}
-                                }
-                            }
-                        },
-                        "400": {
-                            "description": "Bad request",
-                            "content": {
-                                "application/json": {
-                                    "schema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "error": {"type": "string"}
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    """OpenAPI 3.0 specification - comprehensive API documentation"""
+    base_url = request.host_url.rstrip('/')
+    spec = generate_openapi_spec(base_url)
     return jsonify(spec)
 
 # Swagger UI endpoint (manual implementation)

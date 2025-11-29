@@ -8,13 +8,17 @@ from typing import Dict, List, Optional
 from pathlib import Path
 
 class SessionManager:
-    def __init__(self, sessions_dir: str = 'data/sessions'):
+    def __init__(self, sessions_dir: str = None):
         """
         Initialize session manager
         
         Args:
-            sessions_dir: Directory to store session files
+            sessions_dir: Directory to store session files (default: backend/data/sessions)
         """
+        if sessions_dir is None:
+            # Default to backend/data/sessions relative to this file
+            backend_dir = Path(__file__).resolve().parent
+            sessions_dir = str(backend_dir / 'data' / 'sessions')
         self.sessions_dir = Path(sessions_dir)
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
     
