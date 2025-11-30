@@ -6,21 +6,27 @@ import json
 
 API_BASE = "http://localhost:5000/api"
 
-# Example 1: Import network data
-def import_network_data():
-    # Example data is now in backend/data/examples
+# Example 1: Import web reconnaissance data
+def import_web_data():
+    # Real data is in real_data/WEB_DATA folder
     import os
     from pathlib import Path
-    examples_dir = Path(__file__).resolve().parent
-    data_file = examples_dir.parent / 'data' / 'examples' / 'example_network.json'
-    with open(data_file, 'r') as f:
-        network_data = json.load(f)
+    project_root = Path(__file__).resolve().parent.parent.parent
+    metadata_file = project_root / 'real_data' / 'WEB_DATA' / 'metadata.json'
     
+    if not metadata_file.exists():
+        print(f"Real data not found at {metadata_file}")
+        print("Please ensure real_data/WEB_DATA folder exists with metadata.json")
+        return
+    
+    with open(metadata_file, 'r') as f:
+        metadata = json.load(f)
+    
+    # Use autodetect to automatically detect and process the data
     response = requests.post(
-        f"{API_BASE}/import",
+        f"{API_BASE}/import-autodetect",
         json={
-            "collector": "network",
-            "data": network_data
+            "data": metadata
         }
     )
     print("Import result:", response.json())
@@ -62,8 +68,8 @@ if __name__ == "__main__":
     print()
     
     # Import data
-    print("Importing network data...")
-    import_network_data()
+    print("Importing web reconnaissance data...")
+    import_web_data()
     print()
     
     # Get stats

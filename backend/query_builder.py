@@ -99,15 +99,14 @@ class QueryBuilder:
         
         # Degree filtering
         if 'min_degree' in filters or 'max_degree' in filters:
-            if not self.graph_engine.use_neo4j:
-                graph = self.graph_engine.graph
-                min_deg = filters.get('min_degree', 0)
-                max_deg = filters.get('max_degree', float('inf'))
-                
-                result = [
-                    n for n in result
-                    if min_deg <= graph.degree(n['id']) <= max_deg
-                ]
+            graph = self.graph_engine.graph
+            min_deg = filters.get('min_degree', 0)
+            max_deg = filters.get('max_degree', float('inf'))
+            
+            result = [
+                n for n in result
+                if min_deg <= graph.degree(n['id']) <= max_deg
+            ]
         
         return result
     

@@ -50,7 +50,7 @@ A powerful, modular REST API for graph-based cybersecurity analysis and visualiz
 │ Graph Engine │   │ Plugin Manager  │  │  Analytics  │
 │              │   │                  │  │             │
 │ - NetworkX   │   │ - Auto-detect   │  │ - Stats     │
-│ - Neo4j      │   │ - Load plugins  │  │ - Centrality│
+│              │   │ - Load plugins  │  │ - Centrality│
 └──────────────┘   └──────────────────┘  └─────────────┘
         │                   │
         └───────────────────┼───────────────────┐
@@ -109,9 +109,6 @@ pip install -r requirements.txt
 # Create .env file in backend directory
 cat > .env << EOF
 PORT=5000
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=your_password
 EOF
 ```
 
@@ -210,7 +207,7 @@ For complete API documentation, visit `/docs` or `/redoc` when the server is run
 
 ### GraphEngine
 
-The core graph storage and manipulation engine. Supports both in-memory NetworkX graphs and Neo4j databases.
+The core graph storage and manipulation engine. Uses in-memory NetworkX graph storage.
 
 **Key Methods:**
 
@@ -243,14 +240,6 @@ paths = engine.find_paths("192.168.1.1", "192.168.1.10", max_depth=5)
 
 # Get full graph
 graph_data = engine.get_full_graph()
-```
-
-**Neo4j Support:**
-
-```python
-# Use Neo4j instead of in-memory graph
-engine = GraphEngine(use_neo4j=True)
-# Requires NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD in environment
 ```
 
 ### PluginManager
@@ -630,11 +619,6 @@ Create a `.env` file in the backend directory:
 # Server Configuration
 PORT=5000
 
-# Neo4j Configuration (optional)
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=your_password
-
 # Logging
 LOG_LEVEL=INFO
 ```
@@ -768,7 +752,6 @@ Log format:
 ## Performance Considerations
 
 - **In-Memory Graph**: Fast for graphs up to ~100K nodes
-- **Neo4j**: Recommended for larger graphs (>100K nodes)
 - **Pagination**: Use `/api/graph/paginated` for large graphs
 - **Caching**: Plugin detection results are cached for performance
 

@@ -2,15 +2,13 @@
 Plugin Manager - Handles loading and executing modular plugins
 Optimized for efficiency and better plugin separation
 """
-import os
 import importlib
 import importlib.util
 import json
 import ipaddress
 import logging
-from typing import Dict, Any, List, Optional, Set
+from typing import Dict, Any, List, Optional
 from pathlib import Path
-from functools import lru_cache
 
 logger = logging.getLogger('wolftrace.plugins')
 
@@ -86,153 +84,51 @@ class PluginDetector:
                     pass
         return ip_count
     
-    def detect_nmap(self, data: Any) -> Optional[str]:
-        """Detect Nmap XML data"""
-        if 'nmap' not in self.plugins:
-            return None
-        
-        # Check string data first (fastest)
-        if isinstance(data, str):
-            if (data.strip().startswith('<?xml') or data.strip().startswith('<')) and 'nmap' in data.lower()[:200]:
-                return 'nmap'
-        
-        # Check dict data
-        if isinstance(data, dict):
-            # Check metadata tool
-            metadata_tool = self._get_nested_value(data, 'metadata', 'tool', default='')
-            if metadata_tool and 'nmap' in metadata_tool.lower():
-                return 'nmap'
-            
-            # Check for nmap key
-            if 'nmap' in data:
-                return 'nmap'
-            
-            # Check for XML in raw_output
-            if self._has_nested_key_cached(data, 'raw_output', cache_key='raw_output'):
-                raw_output = self._get_nested_value(data, 'raw_output', default='')
-                if isinstance(raw_output, str) and ('nmap' in raw_output.lower() or '<?xml' in raw_output[:100]):
-                    return 'nmap'
-        
-        return None
     
-    def detect_csv(self, data: Any) -> Optional[str]:
-        """Detect CSV data"""
-        if 'csv' not in self.plugins:
-            return None
-        
-        if isinstance(data, str):
-            if ',' in data and '\n' in data:
-                lines = data.strip().split('\n')
-                if len(lines) > 1 and ',' in lines[0]:
-                    return 'csv'
-        
-        return None
-    
-    def detect_network(self, data: Any) -> Optional[str]:
-        """Detect network scanning/topology data"""
-        if 'network' not in self.plugins:
+    def detect_web(self, data: Any) -> Optional[str]:
+        """Detect web reconnaissance data from LangChain Recon Agent"""
+        if 'web' not in self.plugins:
             return None
         
         if not isinstance(data, dict):
             return None
         
-        # Tool indicators mapping
-        tool_indicators = {
-            'rustscan', 'gobuster', 'dig', 'masscan', 'zmap', 'webapprecon',
-            'httpx', 'whatweb', 'wafw00f', 'geoip', 'certificate_transparency',
-            'whois_domain', 'whois_ips', 'network_topology', 'ip_domain_mapping',
-            'nikto', 'nuclei'
-        }
+        # Check for metadata.json structure with tool field
+        if 'tool' in data:
+            tool_value = str(data.get('tool', '')).lower()
+            if 'langchain' in tool_value or 'recon agent' in tool_value:
+                return 'web'
         
-        # Fast check: metadata tool
-        metadata_tool = self._get_nested_value(data, 'metadata', 'tool', default='')
-        if metadata_tool and metadata_tool.lower() in tool_indicators:
-            return 'network'
+        # Check for target field with domain (common in web recon data)
+        if 'target' in data:
+            target = str(data.get('target', '')).lower()
+            # Check if target looks like a domain or URL
+            if '.' in target and ('http' in target or any(c.isalpha() for c in target.split('.')[0])):
+                # Check for web recon specific keys
+                web_keys = ['scan_types', 'tools_used', 'scan_date', 'scan_results']
+                if any(key in data for key in web_keys):
+                    return 'web'
         
-        # Fast check: tool keys at top level
-        if any(tool in data for tool in tool_indicators):
-            return 'network'
-        
-        # Priority 1: IP addresses as keys (strongest indicator)
-        ip_key_count = self._count_ip_keys(data)
-        if ip_key_count >= 3:
-            return 'network'
-        
-        # Priority 2: Network topology structure
-        if ('nodes' in data and 'edges' in data) or 'network_topology' in data:
-            return 'network'
-        
-        # Check for network scanning indicators
-        network_indicators = {
-            'ports', 'port', 'hosts', 'host', 'connections', 'connection',
-            'queries', 'records', 'services', 'ips'
-        }
-        
-        has_network_indicators = any(
-            key in data or self._has_nested_key_cached(data, key, cache_key=f'network_{key}')
-            for key in network_indicators
-        )
-        
-        if has_network_indicators and ip_key_count > 0:
-            return 'network'
-        
-        # Additional check: ports + hosts combination
-        has_ports = 'ports' in data or self._has_nested_key_cached(data, 'ports', cache_key='ports')
-        has_hosts = 'hosts' in data or self._has_nested_key_cached(data, 'hosts', cache_key='hosts')
-        
-        if has_ports and has_hosts:
-            return 'network'
+        # Check for web-specific data structures
+        if 'data' in data:
+            data_content = data.get('data', {})
+            # Check for rustscan, httpx, gobuster, nuclei, nikto structures
+            if isinstance(data_content, dict):
+                web_indicators = [
+                    'hosts' in data_content and 'ports' in str(data_content),  # RustScan
+                    'results' in data_content and 'status_code' in str(data_content),  # HTTPX
+                    'paths' in data_content,  # Gobuster
+                    'findings' in data_content,  # Nuclei
+                    'vulnerabilities' in data_content,  # Nikto
+                    'certificates' in data_content,  # Certificate Transparency
+                    'queries' in data_content,  # DNS Dig
+                ]
+                if any(web_indicators):
+                    return 'web'
         
         return None
     
-    def detect_ad(self, data: Any) -> Optional[str]:
-        """Detect Active Directory data"""
-        if 'ad' not in self.plugins:
-            return None
-        
-        if not isinstance(data, dict):
-            return None
-        
-        # AD-specific indicators
-        ad_indicators = {
-            'users', 'user', 'groups', 'group', 'computers', 'computer',
-            'domain_controllers', 'organizational_units', 'ous', 'domains', 'domain'
-        }
-        
-        # Count AD indicators
-        ad_indicator_count = sum(
-            1 for key in ad_indicators
-            if key in data or self._has_nested_key_cached(data, key, cache_key=f'ad_{key}')
-        )
-        
-        # Need at least 2 AD indicators
-        if ad_indicator_count < 2:
-            return None
-        
-        # Check for AD-specific domain structure
-        if self._has_nested_key_cached(data, 'domains', cache_key='domains'):
-            domains_value = self._get_nested_value(data, 'domains', default=None)
-            if isinstance(domains_value, dict):
-                return 'ad'
-            elif isinstance(domains_value, list) and len(domains_value) > 0:
-                first_domain = domains_value[0]
-                if isinstance(first_domain, dict) and ('domain_controllers' in first_domain or 'users' in first_domain):
-                    return 'ad'
-        
-        # Check for domains/computers without network scanning indicators
-        has_domains = 'domains' in data or 'domain' in data
-        has_computers = 'computers' in data or 'computer' in data
-        
-        if (has_domains or has_computers):
-            # Make sure it's not network scanning data
-            has_ports = 'ports' in data or self._has_nested_key_cached(data, 'ports', cache_key='ports')
-            has_hosts = 'hosts' in data or self._has_nested_key_cached(data, 'hosts', cache_key='hosts')
-            has_connections = 'connections' in data or self._has_nested_key_cached(data, 'connections', cache_key='connections')
-            
-            if not (has_ports or has_hosts or has_connections):
-                return 'ad'
-        
-        return None
+    
     
     def detect_iam(self, data: Any) -> Optional[str]:
         """Detect IAM (Identity and Access Management) data"""
@@ -281,7 +177,7 @@ class PluginDetector:
         test_engine = self._get_test_engine()
         
         # Try plugins in order (prioritize specific ones first)
-        priority_order = ['nmap', 'ad', 'iam', 'cloud', 'network', 'csv']
+        priority_order = ['web', 'iam']
         
         # First try priority plugins
         for plugin_name in priority_order:
@@ -468,48 +364,25 @@ class PluginManager:
             return None
         
         # Detection order (most specific first):
-        # 1. String-based detection (fastest)
-        # 2. Nmap (specific XML format)
-        # 3. CSV (specific text format)
-        # 4. AD (specific structure)
-        # 5. IAM (specific structure)
-        # 6. Cloud (specific structure)
-        # 7. Network (generic, but common)
-        # 8. Plugin test fallback
-        
-        # String data detection
-        if isinstance(data, str):
-            result = self.detector.detect_nmap(data)
-            if result:
-                return result
-            
-            result = self.detector.detect_csv(data)
-            if result:
-                return result
+        # 1. Web (metadata.json based detection)
+        # 2. IAM (specific structure)
+        # 3. Plugin test fallback
         
         # Dict data detection
         if isinstance(data, dict):
-            # Try specific detectors first (most specific to least specific)
-            detectors = [
-                self.detector.detect_nmap,
-                self.detector.detect_ad,
-                self.detector.detect_iam,
-                self.detector.detect_cloud,
-                self.detector.detect_network,
-            ]
+            # Check metadata.json first (highest priority for real data)
+            result = self.detector.detect_web(data)
+            if result:
+                return result
             
-            for detector in detectors:
-                result = detector(data)
-                if result:
-                    return result
+            # Try IAM detection
+            result = self.detector.detect_iam(data)
+            if result:
+                return result
         
         # Fallback: try plugins directly
         result = self.detector.detect_by_plugin_test(data)
         if result:
             return result
-        
-        # Final fallback: default to network if dict data
-        if isinstance(data, dict) and 'network' in self.plugins:
-            return 'network'
         
         return None

@@ -4,13 +4,21 @@ __pycache__/
 *$py.class
 *.so
 .Python
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
 env/
 venv/
 ENV/
-.venv
-*.egg-info/
-dist/
-build/
+.venv/
+myenv/
+myvenv/
 
 # Node / Bun
 node_modules/
@@ -21,13 +29,20 @@ yarn-error.log*
 .pnpm-debug.log*
 bun-debug.log*
 
-# Svelte
+# Svelte/SvelteKit/Vite
 frontend/build/
 frontend/dist/
 frontend/.svelte-kit/
+.svelte-kit/
+.vite/
 frontend/.env
 frontend/.env.*
 !.env.example
+
+# Environment variables
+.env
+.env.local
+.env.*.local
 
 # IDE
 .vscode/
@@ -36,18 +51,20 @@ frontend/.env.*
 *.swo
 *.sublime-project
 *.sublime-workspace
+*.code-workspace
+*.iml
 
 # OS
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 desktop.ini
 
-# Environment
-.env
-.env.local
-.env.*.local
-
-# Neo4j
+# Neo4j (legacy - no longer used)
 neo4j/
 neo4j_data/
 
@@ -70,3 +87,10 @@ coverage/
 *.temp
 .cache/
 
+# Build artifacts
+*.zip
+*.tar.gz
+*.whl
+
+# Real data (sensitive/private)
+real_data/

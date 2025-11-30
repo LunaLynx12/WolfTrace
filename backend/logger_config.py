@@ -185,86 +185,15 @@ def setup_logging(
         access_logger.setLevel(logging.INFO)
         access_logger.propagate = False
     
-    # Set levels for third-party loggers
-    logging.getLogger('werkzeug').setLevel(logging.WARNING)  # Reduce Flask noise
-    logging.getLogger('urllib3').setLevel(logging.WARNING)
-    logging.getLogger('neo4j').setLevel(logging.WARNING)
+        # Set levels for third-party loggers
+        logging.getLogger('werkzeug').setLevel(logging.WARNING)  # Reduce Flask noise
+        logging.getLogger('urllib3').setLevel(logging.WARNING)
     
     # Create application logger
     app_logger = logging.getLogger('wolftrace')
     app_logger.info(f"Logging initialized - Level: {log_level}, Directory: {log_dir}")
     
     return app_logger
-
-
-def log_request_response(f):
-    """Decorator to log API request/response details"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        from flask import request, g
-        
-        # Start timer
-        start_time = time.time()
-        
-        # Log request
-        access_logger = logging.getLogger('wolftrace.access')
-        access_logger.info(
-            f"Request: {request.method} {request.path}",
-            extra={
-                'method': request.method,
-                'path': request.path,
-                'ip': request.remote_addr,
-                'user_agent': request.headers.get('User-Agent', 'Unknown')
-            }
-        )
-        
-        # Store start time for duration calculation
-        g.start_time = start_time
-        
-        try:
-            # Execute the function
-            response = f(*args, **kwargs)
-            
-            # Calculate duration
-            duration = time.time() - start_time
-            
-            # Get status code
-            if hasattr(response, 'status_code'):
-                status = response.status_code
-            else:
-                status = 200
-            
-            # Log response
-            access_logger.info(
-                f"Response: {request.method} {request.path} - {status}",
-                extra={
-                    'method': request.method,
-                    'path': request.path,
-                    'status': status,
-                    'duration': duration,
-                    'ip': request.remote_addr
-                }
-            )
-            
-            return response
-            
-        except Exception as e:
-            duration = time.time() - start_time
-            access_logger.error(
-                f"Error: {request.method} {request.path} - {str(e)}",
-                extra={
-                    'method': request.method,
-                    'path': request.path,
-                    'status': 500,
-                    'duration': duration,
-                    'ip': request.remote_addr,
-                    'error': str(e)
-                },
-                exc_info=True
-            )
-            raise
-    
-    return decorated_function
 
 
 def log_performance(operation_name: str):

@@ -1,0 +1,13 @@
+{
+  "name": "web",
+  "version": "1.0.0",
+  "description": "Web reconnaissance data processor for LangChain Recon Agent output",
+  "supported_formats": ["json"],
+  "detection_keys": [
+    "tool",
+    "LangChain Recon Agent",
+    "target",
+    "scan_types"
+  ]
+}
+

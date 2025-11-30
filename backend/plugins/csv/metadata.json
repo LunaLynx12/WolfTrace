@@ -1,7 +1,0 @@
-{
-  "name": "csv",
-  "version": "1.0.0",
-  "description": "CSV file parser for relationship data",
-  "supported_formats": ["csv"]
-}
-

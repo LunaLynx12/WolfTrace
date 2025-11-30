@@ -1273,17 +1273,17 @@ button.icon-action {
   position: fixed;
   right: var(--space-1);
   top: var(--space-1);
-  bottom: var(--space-1);
-  width: 280px;
+  width: 320px;
+  max-height: 60vh;
   z-index: 100;
   display: flex;
   flex-direction: column;
   pointer-events: none;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
 }
 
 .right-sidebar > * {
   pointer-events: auto;
-  height: 100%;
 }
 
 .app.graph-fullscreen .right-sidebar {
@@ -1294,9 +1294,9 @@ button.icon-action {
   display: none;
 }
 
-/* Only add margin when sidebar is visible */
+/* No margin needed - it's floating in top-right */
 .app.has-right-sidebar:not(.graph-fullscreen) .graph-container {
-  margin-right: 300px; /* Space for right sidebar */
+  margin-right: 0;
 }
 
 /* Cached Graph Dialog Modal */
@@ -1341,5 +1341,222 @@ button.icon-action {
 
 .modal-dialog p:last-of-type {
   margin-bottom: 0;
+}
+
+/* Node Hover Tooltip */
+/* Node Popup Modal */
+.node-popup-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.node-popup {
+  background: var(--bg-overlay-5);
+  border: 1px solid var(--border-focus);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(20px);
+  width: 90%;
+  max-width: 800px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  animation: slideUp 0.3s ease-out;
+  overflow: hidden;
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--bg-overlay-4);
+}
+
+.popup-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.popup-title strong {
+  color: var(--text-0);
+  font-size: 18px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.popup-type {
+  background: var(--brand);
+  color: var(--bg-0);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.popup-close {
+  background: transparent;
+  border: none;
+  color: var(--text-2);
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.popup-close:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.popup-body {
+  padding: 20px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.popup-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.popup-row:last-child {
+  border-bottom: none;
+}
+
+.popup-key {
+  color: var(--brand);
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.popup-value {
+  color: var(--text-1);
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.popup-array {
+  margin-top: 8px;
+  margin-left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.popup-array-item {
+  padding: 8px 12px;
+  background: var(--bg-2);
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: 'Courier New', monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-left: 3px solid var(--brand);
+}
+
+.popup-object {
+  margin-top: 8px;
+  margin-left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  background: var(--bg-2);
+  border-radius: 6px;
+  border-left: 3px solid var(--brand);
+}
+
+.popup-nested {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  padding: 6px 0;
+}
+
+.popup-nested .popup-key {
+  min-width: auto;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.popup-nested .popup-value {
+  font-size: 12px;
+  margin-left: 12px;
+}
+
+/* Scrollbar styling for popup */
+.popup-body::-webkit-scrollbar {
+  width: 10px;
+}
+
+.popup-body::-webkit-scrollbar-track {
+  background: var(--bg-2);
+  border-radius: 5px;
+}
+
+.popup-body::-webkit-scrollbar-thumb {
+  background: var(--brand);
+  border-radius: 5px;
+}
+
+.popup-body::-webkit-scrollbar-thumb:hover {
+  background: var(--brand-600);
 }
 

@@ -1,7 +1,14 @@
 {
   "name": "iam",
   "version": "1.0.0",
-  "description": "Identity and Access Management analyzer - Visualize permissions, roles, and access",
-  "supported_formats": ["json"]
+  "description": "Identity and Access Management data processor",
+  "supported_formats": ["json"],
+  "detection_keys": [
+    "users",
+    "roles",
+    "policies",
+    "access_grants",
+    "permissions"
+  ]
 }
 

@@ -3,16 +3,6 @@
   "title": "WolfTrace Configuration",
   "type": "object",
   "properties": {
-    "graph_engine": {
-      "type": "object",
-      "properties": {
-        "use_neo4j": {
-          "type": "boolean",
-          "default": false,
-          "description": "Use Neo4j database instead of in-memory graph"
-        }
-      }
-    },
     "plugins": {
       "type": "object",
       "properties": {

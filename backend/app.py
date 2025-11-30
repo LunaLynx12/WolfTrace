@@ -4,11 +4,11 @@ WolfTrace Backend - Main API Server
 from flask import Flask, request, jsonify, send_file, g
 from flask_cors import CORS
 import os
-import io
 import json
 import zipfile
 import logging
 import time
+from io import BytesIO
 from dotenv import load_dotenv
 from graph_engine import GraphEngine
 from plugin_manager import PluginManager
@@ -22,7 +22,7 @@ from bulk_operations import BulkOperations
 from graph_templates import GraphTemplates
 from history_manager import HistoryManager
 from openapi_spec import generate_openapi_spec
-from logger_config import setup_logging, get_logger, log_request_response, log_performance
+from logger_config import setup_logging, get_logger, log_performance
 
 load_dotenv()
 
@@ -136,7 +136,6 @@ def api_root():
     })
 
 @app.route('/api/health', methods=['GET'])
-@log_request_response
 def health():
     """Health check endpoint"""
     logger.debug("Health check requested")
@@ -250,13 +249,25 @@ def import_zip():
 
     try:
         merged = None
-        with zipfile.ZipFile(file.stream) as zf:
+        # Read file content into memory to avoid SpooledTemporaryFile seekable issue
+        file.seek(0)  # Reset file pointer
+        file_content = file.read()
+        
+        with zipfile.ZipFile(BytesIO(file_content)) as zf:
             for name in zf.namelist():
                 if name.lower().endswith('.json'):
                     with zf.open(name) as f:
                         try:
                             data = json.load(f)
-                            merged = _merge_json_objects(merged, data)
+                            # Extract filename without extension to use as key
+                            filename_key = Path(name).stem.lower()
+                            if merged is None:
+                                merged = {}
+                            # Add data under filename key for plugin detection
+                            merged[filename_key] = data
+                            # For metadata, also merge top-level keys
+                            if filename_key == 'metadata':
+                                merged = _merge_json_objects(merged, data)
                         except Exception:
                             # skip invalid JSON entries
                             continue
@@ -349,7 +360,11 @@ def import_zip_autodetect():
         json_files = []
         total_size = 0
         
-        with zipfile.ZipFile(file.stream) as zf:
+        # Read file content into memory to avoid SpooledTemporaryFile seekable issue
+        file.seek(0)  # Reset file pointer
+        file_content = file.read()
+        
+        with zipfile.ZipFile(BytesIO(file_content)) as zf:
             for name in zf.namelist():
                 if name.lower().endswith('.json'):
                     json_files.append(name)
@@ -367,7 +382,21 @@ def import_zip_autodetect():
                                     'size': file_size
                                 }
                             )
-                            merged = _merge_json_objects(merged, data)
+                            
+                            # Extract filename without extension to use as key
+                            # This allows web plugin to find data by tool name (e.g., 'rustscan', 'dns_dig')
+                            filename_key = Path(name).stem.lower()  # e.g., 'rustscan.json' -> 'rustscan'
+                            
+                            # Initialize merged dict if needed
+                            if merged is None:
+                                merged = {}
+                            
+                            # Add data under filename key for plugin detection
+                            merged[filename_key] = data
+                            
+                            # For metadata.json, also merge its keys at top level for plugin detection
+                            if filename_key == 'metadata':
+                                merged = _merge_json_objects(merged, data)
                         except Exception as e:
                             logger.warning(
                                 f"Skipping invalid JSON file: {name}",

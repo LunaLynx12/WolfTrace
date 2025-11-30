@@ -1,7 +1,0 @@
-{
-  "name": "ad",
-  "version": "1.0.0",
-  "description": "Active Directory relationship mapper (BloodHound-compatible)",
-  "supported_formats": ["json"]
-}
-

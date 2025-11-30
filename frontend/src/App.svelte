@@ -61,6 +61,9 @@
   let initialLoaded = false;
   let showCachedGraphDialog = false;
   let cachedGraphData = null;
+  
+  // Node popup (click to show)
+  let popupNode = null;
 
   // Performance: Cache layout results to avoid recalculating
   let cachedLayoutData = null;
@@ -177,7 +180,7 @@
         .linkDirectionalArrowRelPos(1)
         .linkCurvature(0) // Straight lines are faster to render
         .onNodeClick(handleNodeClick)
-        .onNodeHover((node) => {
+        .onNodeHover((node, prevNode) => {
           if (typeof document !== 'undefined' && document.body) {
             document.body.style.cursor = node ? 'pointer' : 'default';
           }
@@ -359,9 +362,13 @@
         e.preventDefault();
       }
       if (e.key === 'Escape') {
-        selectedNode = null;
-        highlightedPath = null;
-        selectedNodes = [];
+        if (popupNode) {
+          popupNode = null;
+        } else {
+          selectedNode = null;
+          highlightedPath = null;
+          selectedNodes = [];
+        }
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
         e.preventDefault();
@@ -510,8 +517,6 @@
       const response = await axios.get(`${API_BASE}/graph`);
       const nodes = response.data.nodes || [];
       const edges = response.data.edges || [];
-      // Performance: Remove console.log in production
-      // console.log(`Loaded graph: ${nodes.length} nodes, ${edges.length} edges`);
       
       // Initialize enabledNodeTypes BEFORE setting graphData to prevent race conditions
       // This ensures it's set before any reactive statements fire
@@ -531,9 +536,15 @@
       cachedLayoutData = null;
       cachedLayoutHash = null;
       
-      // Small delay to ensure state is settled before updating graph
+      // Force hash reset to ensure reactive statement detects the change
+      lastGraphDataHash = '';
+      
+      // Small delay to ensure state is settled, then force update
+      // The reactive statement will also handle it, but we ensure it happens
       await new Promise(resolve => setTimeout(resolve, 10));
-      updateGraph();
+      if (graphInstance) {
+        updateGraph();
+      }
       try {
         await cacheManager.saveGraph(graphData);
       } catch (cacheError) {
@@ -909,7 +920,12 @@
           headers: { 'Content-Type': 'multipart/form-data' }
         });
         const detectedPlugin = response.data.detected_plugin || 'unknown';
-        showNotification(`Import successful: ${response.data.result?.message || 'ZIP imported'} (detected: ${detectedPlugin})`, 'success');
+        const nodesAdded = response.data.nodes_added || 0;
+        const edgesAdded = response.data.edges_added || 0;
+        showNotification(
+          `Import successful: ${nodesAdded} nodes, ${edgesAdded} edges (detected: ${detectedPlugin})`,
+          'success'
+        );
       } else {
         const text = await file.text();
         let data;
@@ -1043,6 +1059,7 @@
 
   function handleNodeClick(node, event) {
     selectedNode = node;
+    popupNode = node; // Show popup on click
     
     if (event?.ctrlKey || event?.metaKey) {
       if (selectedNodes.includes(node.id)) {
@@ -1314,12 +1331,14 @@
     }
     
     // Apply node type filter - always filter based on enabledNodeTypes
+    // IMPORTANT: Only filter if types are explicitly initialized AND user has customized them
+    // Otherwise, show all nodes by default
     if (result.nodes && result.nodes.length > 0) {
-      // If types are initialized but none enabled, show nothing
-      if (enabledNodeTypes.size === 0 && graphDataInitialized) {
-        result.nodes = [];
-        result.links = [];
-      } else if (enabledNodeTypes.size > 0) {
+      // Only filter if:
+      // 1. Types are initialized (we know what types exist)
+      // 2. User has customized types (explicitly enabled/disabled some)
+      // 3. There are enabled types (at least one is enabled)
+      if (graphDataInitialized && userHasCustomizedTypes && enabledNodeTypes.size > 0) {
         // Filter nodes by enabled types
         const filteredNodeIds = new Set();
         result.nodes = result.nodes.filter(n => {
@@ -1341,7 +1360,7 @@
           });
         }
       }
-      // If enabledNodeTypes.size === 0 and not initialized, show all (default state)
+      // Otherwise, show all nodes (default behavior - no filtering)
     }
     
     // Performance: Cache the result
@@ -1435,26 +1454,45 @@
   // Performance: Only update graph when data actually changes (not just reference)
   // Use hash-based change detection to catch when nodes/links are replaced with same-length arrays
   let lastGraphDataHash = '';
+  let updateGraphTimeout = null;
+  
   // Watch both graphData AND enabledNodeTypes for changes
   // Reference enabledNodeTypes.size to ensure reactivity
   $: if (graphInstance && graphData && !preventAutoLoad && enabledNodeTypes.size >= 0) {
-    // Create hash from node IDs and link source/target pairs
-    // This catches changes even when arrays have same length
-    const nodeIds = (graphData.nodes || []).map(n => n.id).sort().join(',');
-    const linkPairs = (graphData.links || []).map(l => {
-      const sourceId = typeof l.source === 'string' ? l.source : (l.source?.id || '');
-      const targetId = typeof l.target === 'string' ? l.target : (l.target?.id || '');
-      return `${sourceId}-${targetId}`;
-    }).sort().join(',');
-    // Include enabledNodeTypes in hash to trigger update when types change
-    const enabledTypesHash = [...enabledNodeTypes].sort().join(',');
-    const hash = `${(graphData.nodes?.length || 0)}-${(graphData.links?.length || 0)}-${nodeIds}-${linkPairs}-${enabledTypesHash}`;
-    
-    // Only update if hash changed or it's the first load
-    if (hash !== lastGraphDataHash || lastGraphDataHash === '') {
-      lastGraphDataHash = hash;
-    updateGraph();
+    // Debounce updates to prevent excessive calls
+    if (updateGraphTimeout) {
+      clearTimeout(updateGraphTimeout);
     }
+    
+    updateGraphTimeout = setTimeout(() => {
+      // Create hash that detects actual data changes
+      // Use a combination of counts and a sample of IDs for performance
+      const nodeCount = graphData.nodes?.length || 0;
+      const linkCount = graphData.links?.length || 0;
+      
+      // Sample IDs from different parts of the array for better change detection
+      let idSample = '';
+      if (nodeCount > 0) {
+        const sampleSize = Math.min(10, nodeCount); // Sample up to 10 nodes
+        const step = Math.max(1, Math.floor(nodeCount / sampleSize));
+        const sampledIds = [];
+        for (let i = 0; i < nodeCount; i += step) {
+          sampledIds.push(graphData.nodes[i]?.id || '');
+          if (sampledIds.length >= sampleSize) break;
+        }
+        idSample = sampledIds.join(',');
+      }
+      
+      const enabledTypesHash = [...enabledNodeTypes].sort().join(',');
+      const hash = `${nodeCount}-${linkCount}-${idSample}-${enabledTypesHash}`;
+      
+      // Always update if hash changed, or if it's the first load, or if we have data but hash is empty
+      if (hash !== lastGraphDataHash || lastGraphDataHash === '' || (nodeCount > 0 && lastGraphDataHash === '')) {
+        lastGraphDataHash = hash;
+        updateGraph();
+      }
+      updateGraphTimeout = null;
+    }, 30); // Reduced debounce to 30ms for more responsive updates
   }
 
   // re-measure after collapsing/expanding
@@ -1469,6 +1507,18 @@
     if (keyboardShortcutsCleanup) {
       keyboardShortcutsCleanup();
       keyboardShortcutsCleanup = null;
+    }
+    
+    // Memory leak fix: Clean up updateGraph timeout
+    if (updateGraphTimeout) {
+      clearTimeout(updateGraphTimeout);
+      updateGraphTimeout = null;
+    }
+    
+    // Memory leak fix: Clean up tooltip timeout
+    if (tooltipTimeout) {
+      clearTimeout(tooltipTimeout);
+      tooltipTimeout = null;
     }
     
     // Memory leak fix: Clean up resize timeout
@@ -1908,7 +1958,7 @@
   />
 
   <div class="graph-container" class:collapsed={graphCollapsed} class:fullscreen={graphFullscreen}>
-    <div class="graph-inner">
+    <div class="graph-inner" style="position: relative;">
       <div class="graph-toolbar">
         <Button
           variant="secondary"
@@ -1919,9 +1969,6 @@
         >
           {graphFullscreen ? '⤓ Exit Fullscreen' : '⤢ Fullscreen'}
         </Button>
-      </div>
-      <div style="position: absolute; top: 10px; right: 10px; z-index: 1000;">
-        <GraphStatsWidget graphData={graphData} compact={true} />
       </div>
       {#if loading}
         <div class="loading">Loading...</div>
@@ -1941,6 +1988,57 @@
         {/if}
       </div>
     </div>
+    
+    <!-- Node Popup Modal -->
+    {#if popupNode}
+      <div class="node-popup-overlay" on:click={() => popupNode = null} on:keydown={(e) => e.key === 'Escape' && (popupNode = null)}>
+        <div class="node-popup" on:click|stopPropagation>
+          <div class="popup-header">
+            <div class="popup-title">
+              <strong>{popupNode.id || 'Unknown'}</strong>
+              {#if popupNode.type}
+                <span class="popup-type">{popupNode.type}</span>
+              {/if}
+            </div>
+            <button class="popup-close" on:click={() => popupNode = null} title="Close (Esc)">
+              ×
+            </button>
+          </div>
+          <div class="popup-body">
+            {#each Object.entries(popupNode).filter(([key]) => !key.startsWith('__') && key !== 'id' && key !== 'type' && key !== 'x' && key !== 'y' && key !== 'vx' && key !== 'vy' && key !== 'fx' && key !== 'fy' && key !== 'level' && key !== 'layoutType') as [key, value]}
+              <div class="popup-row">
+                <span class="popup-key">{key}:</span>
+                <span class="popup-value">
+                  {#if typeof value === 'object' && value !== null}
+                    {#if Array.isArray(value)}
+                      {value.length} items
+                      {#if value.length > 0}
+                        <div class="popup-array">
+                          {#each value as item}
+                            <div class="popup-array-item">{typeof item === 'object' ? JSON.stringify(item, null, 2) : String(item)}</div>
+                          {/each}
+                        </div>
+                      {/if}
+                    {:else}
+                      <div class="popup-object">
+                        {#each Object.entries(value) as [subKey, subValue]}
+                          <div class="popup-nested">
+                            <span class="popup-key">{subKey}:</span>
+                            <span class="popup-value">{typeof subValue === 'object' ? JSON.stringify(subValue, null, 2) : String(subValue)}</span>
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
+                  {:else}
+                    {String(value)}
+                  {/if}
+                </span>
+              </div>
+            {/each}
+          </div>
+        </div>
+      </div>
+    {/if}
   </div>
 
   <!-- Right Sidebar: Node Type Filter -->

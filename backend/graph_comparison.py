@@ -1,7 +1,7 @@
 """
 Graph Comparison - Compare two graphs and find differences
 """
-from typing import Dict, List, Set, Any
+from typing import Dict, List, Any
 from collections import defaultdict
 
 class GraphComparison:

@@ -1,4 +1,0 @@
-"""
-WolfTrace Backend Test Suite
-"""
-

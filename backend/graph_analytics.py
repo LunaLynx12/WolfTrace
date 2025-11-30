@@ -11,9 +11,6 @@ class GraphAnalytics:
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get comprehensive graph statistics"""
-        if self.graph_engine.use_neo4j:
-            return self._get_neo4j_stats()
-        
         graph = self.graph_engine.graph
         if len(graph.nodes) == 0:
             return {"error": "Graph is empty"}
@@ -93,9 +90,6 @@ class GraphAnalytics:
     
     def find_communities(self, max_communities: int = 10) -> List[Dict[str, Any]]:
         """Find communities in the graph using Louvain algorithm"""
-        if self.graph_engine.use_neo4j:
-            return []
-        
         try:
             import networkx.algorithms.community as nx_comm
             
@@ -124,9 +118,6 @@ class GraphAnalytics:
     
     def get_node_neighbors(self, node_id: str, depth: int = 1) -> Dict[str, Any]:
         """Get neighbors of a node up to specified depth"""
-        if self.graph_engine.use_neo4j:
-            return {}
-        
         graph = self.graph_engine.graph
         if node_id not in graph:
             return {"error": "Node not found"}
@@ -148,9 +139,4 @@ class GraphAnalytics:
         
         neighbors["total_neighbors"] = len(set(neighbors["depth_1"]))
         return neighbors
-    
-    def _get_neo4j_stats(self) -> Dict[str, Any]:
-        """Get statistics from Neo4j"""
-        # Placeholder for Neo4j implementation
-        return {"error": "Neo4j analytics not yet implemented"}
 
