@@ -1268,3 +1268,78 @@ button.icon-action {
   background: transparent;
 }
 
+/* Right Sidebar: Node Type Filter */
+.right-sidebar {
+  position: fixed;
+  right: var(--space-1);
+  top: var(--space-1);
+  bottom: var(--space-1);
+  width: 280px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+}
+
+.right-sidebar > * {
+  pointer-events: auto;
+  height: 100%;
+}
+
+.app.graph-fullscreen .right-sidebar {
+  display: none;
+}
+
+.right-sidebar.hidden {
+  display: none;
+}
+
+/* Only add margin when sidebar is visible */
+.app.has-right-sidebar:not(.graph-fullscreen) .graph-container {
+  margin-right: 300px; /* Space for right sidebar */
+}
+
+/* Cached Graph Dialog Modal */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--bg-overlay-bg0);
+  backdrop-filter: blur(4px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 10000;
+}
+
+.modal-dialog {
+  background: var(--bg-overlay-1);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  padding: var(--space-2);
+  max-width: 480px;
+  width: min(92vw, 480px);
+  box-shadow: var(--shadow), 0 0 0 1px var(--border);
+  z-index: 10001;
+}
+
+.modal-dialog h3 {
+  margin: 0 0 16px 0;
+  color: var(--brand);
+  font-size: 20px;
+}
+
+.modal-dialog p {
+  margin: 0 0 12px 0;
+  color: var(--text-1);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.modal-dialog p:last-of-type {
+  margin-bottom: 0;
+}
+

@@ -140,7 +140,8 @@ class PluginDetector:
         tool_indicators = {
             'rustscan', 'gobuster', 'dig', 'masscan', 'zmap', 'webapprecon',
             'httpx', 'whatweb', 'wafw00f', 'geoip', 'certificate_transparency',
-            'whois_domain', 'whois_ips', 'network_topology', 'ip_domain_mapping'
+            'whois_domain', 'whois_ips', 'network_topology', 'ip_domain_mapping',
+            'nikto', 'nuclei'
         }
         
         # Fast check: metadata tool

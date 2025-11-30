@@ -14,6 +14,7 @@
   import NodeGrouping from './components/NodeGrouping.svelte';
   import KeyboardShortcuts from './components/KeyboardShortcuts.svelte';
   import GraphStatsWidget from './components/GraphStatsWidget.svelte';
+  import NodeTypeFilter from './components/NodeTypeFilter.svelte';
   import Button from './components/ui/Button.svelte';
   import TabButton from './components/ui/TabButton.svelte';
   import NodeNotes from './components/NodeNotes.svelte';
@@ -25,6 +26,7 @@
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
   let graphData = { nodes: [], links: [] };
+  let preventAutoLoad = false; // Prevent reactive statement from auto-loading cached data
   let selectedNode = null;
   let plugins = [];
   let loading = false;
@@ -40,15 +42,25 @@
   let showShortcuts = false;
   let copiedNode = null;
   let nodeGrouping = null;
+  let enabledNodeTypes = new Set(); // Track enabled node types for filtering
+  let graphDataInitialized = false; // Track if we've initialized enabledNodeTypes for current graph
   let graphContainer;
   let graphInstance = null;
   let ForceGraphLib = null;
   let graphCollapsed = false;
   let graphFullscreen = false;
+  let recenterTimeout = null; // Debounce recenter calls
+  let isRecenterInProgress = false; // Prevent multiple recenters
+  let isDragging = false; // Track if user is dragging a node
+  let isScrolling = false; // Track if user is scrolling
+  let scrollTimeout = null; // Track when scrolling stops
+  let lastRecenterTime = 0; // Track last recenter to prevent rapid calls
   let resizeObserver = null;
   let menuOpen = false;
 
   let initialLoaded = false;
+  let showCachedGraphDialog = false;
+  let cachedGraphData = null;
 
   // Performance: Cache layout results to avoid recalculating
   let cachedLayoutData = null;
@@ -227,6 +239,96 @@
         window.addEventListener('resize', updateGraphSize);
       }
 
+      // Add mouse/touch event listeners to detect dragging and scrolling
+      if (graphContainer) {
+        let mouseDown = false;
+        let touchStart = false;
+        
+        // Mouse events
+        graphContainer.addEventListener('mousedown', (e) => {
+          mouseDown = true;
+          isDragging = false; // Will be set to true if mouse moves
+        });
+        
+        graphContainer.addEventListener('mousemove', (e) => {
+          if (mouseDown) {
+            isDragging = true;
+            // Cancel any pending recenter when dragging
+            if (recenterTimeout) {
+              clearTimeout(recenterTimeout);
+              recenterTimeout = null;
+            }
+          }
+        });
+        
+        graphContainer.addEventListener('mouseup', () => {
+          if (mouseDown && isDragging) {
+            // Wait for drag to settle before allowing recenter
+            setTimeout(() => {
+              isDragging = false;
+            }, 500);
+          } else {
+            isDragging = false;
+          }
+          mouseDown = false;
+        });
+        
+        graphContainer.addEventListener('mouseleave', () => {
+          mouseDown = false;
+          if (isDragging) {
+            setTimeout(() => {
+              isDragging = false;
+            }, 500);
+          }
+        });
+        
+        // Touch events
+        graphContainer.addEventListener('touchstart', () => {
+          touchStart = true;
+          isDragging = false;
+        });
+        
+        graphContainer.addEventListener('touchmove', () => {
+          if (touchStart) {
+            isDragging = true;
+            if (recenterTimeout) {
+              clearTimeout(recenterTimeout);
+              recenterTimeout = null;
+            }
+          }
+        });
+        
+        graphContainer.addEventListener('touchend', () => {
+          if (touchStart && isDragging) {
+            setTimeout(() => {
+              isDragging = false;
+            }, 500);
+          } else {
+            isDragging = false;
+          }
+          touchStart = false;
+        });
+        
+        // Scroll detection (wheel events)
+        graphContainer.addEventListener('wheel', () => {
+          isScrolling = true;
+          // Cancel any pending recenter when scrolling
+          if (recenterTimeout) {
+            clearTimeout(recenterTimeout);
+            recenterTimeout = null;
+          }
+          // Clear existing scroll timeout
+          if (scrollTimeout) {
+            clearTimeout(scrollTimeout);
+          }
+          // Wait for scrolling to stop
+          scrollTimeout = setTimeout(() => {
+            isScrolling = false;
+            scrollTimeout = null;
+          }, 500); // Wait 500ms after last scroll event
+        }, { passive: true });
+      }
+
       updateGraph();
     }
   }
@@ -296,37 +398,141 @@
       return;
     }
     try {
+      // Clear graphData first to prevent any auto-loading
+      graphData = { nodes: [], links: [] };
+      preventAutoLoad = true;
+      
       await cacheManager.init();
       const cachedGraph = await cacheManager.getGraph();
       if (cachedGraph && cachedGraph.nodes?.length > 0) {
-        if (window.confirm('Load cached graph from previous session?')) {
-          graphData = cachedGraph;
-          initialLoaded = true;
-          updateGraph();
-        } else {
-          initialLoaded = false;
-        }
+        cachedGraphData = cachedGraph;
+        showCachedGraphDialog = true;
+        // Don't set initialLoaded here - wait for user decision
+        // Keep preventAutoLoad = true until user decides
+      } else {
+        initialLoaded = false;
+        preventAutoLoad = false; // Safe to allow auto-loading
       }
     } catch (error) {
       console.error('Cache initialization failed:', error);
+      initialLoaded = false;
+      preventAutoLoad = false; // Safe to allow auto-loading
     }
+  }
+
+  async function handleLoadCachedGraph() {
+    if (cachedGraphData) {
+      preventAutoLoad = false; // Allow updates now
+      graphData = cachedGraphData;
+      initialLoaded = true;
+      showCachedGraphDialog = false;
+      cachedGraphData = null;
+      // Clear filtered data
+      filteredNodes = null;
+      queryFilter = null;
+      selectedNode = null;
+      selectedNodes = [];
+      highlightedPath = null;
+      // Performance: Invalidate layout cache
+      cachedLayoutData = null;
+      cachedLayoutHash = null;
+      
+      // Initialize enabledNodeTypes immediately after loading cached data
+      if (graphData.nodes && graphData.nodes.length > 0 && !userHasCustomizedTypes) {
+        const allTypes = new Set(graphData.nodes.map(n => n.type || 'default').filter(Boolean));
+        enabledNodeTypes = new Set(allTypes);
+        graphDataInitialized = true;
+      }
+      
+      // Wait for graphInstance to be ready if it's not yet
+      if (!graphInstance) {
+        // Wait a bit for graph to initialize
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      updateGraph();
+    }
+  }
+
+  async function handleCancelCachedGraph() {
+    // Clear the cache when user cancels
+    try {
+      await cacheManager.saveGraph({ nodes: [], links: [] });
+    } catch (error) {
+      console.error('Failed to clear cache:', error);
+    }
+    showCachedGraphDialog = false;
+    cachedGraphData = null;
+    initialLoaded = false;
+    preventAutoLoad = false; // Allow updates now
+    // Ensure graphData is empty
+    graphData = { nodes: [], links: [] };
+    // Clear the graph display immediately
+    if (graphInstance) {
+      graphInstance.graphData({ nodes: [], links: [] });
+    }
+    // Clear backend graph as well
+    try {
+      await axios.post(`${API_BASE}/clear`);
+    } catch (error) {
+      console.error('Failed to clear backend graph:', error);
+    }
+    // Load fresh graph
+    await loadGraph();
   }
 
   async function loadGraph() {
     loading = true;
     try {
+      // Reset node type filter initialization FIRST, before clearing graphData
+      // This prevents reactive statements from interfering
+      graphDataInitialized = false;
+      enabledNodeTypes = new Set();
+      userHasCustomizedTypes = false; // Reset customization flag for new graph
+      
+      // Clear existing graph data
+      graphData = { nodes: [], links: [] };
+      // Performance: Invalidate layout cache when new data is loaded
+      cachedLayoutData = null;
+      cachedLayoutHash = null;
+      // Clear filtered data
+      filteredNodes = null;
+      queryFilter = null;
+      selectedNode = null;
+      selectedNodes = [];
+      highlightedPath = null;
+      
+      // Update graph to clear the display - ensure graphInstance is ready
+      if (graphInstance) {
+        // Force clear by setting empty data directly
+        graphInstance.graphData({ nodes: [], links: [] });
+      }
+      
       const response = await axios.get(`${API_BASE}/graph`);
       const nodes = response.data.nodes || [];
       const edges = response.data.edges || [];
       // Performance: Remove console.log in production
       // console.log(`Loaded graph: ${nodes.length} nodes, ${edges.length} edges`);
+      
+      // Initialize enabledNodeTypes BEFORE setting graphData to prevent race conditions
+      // This ensures it's set before any reactive statements fire
+      if (nodes.length > 0 && !userHasCustomizedTypes) {
+        const allTypes = new Set(nodes.map(n => n.type || 'default').filter(Boolean));
+        enabledNodeTypes = new Set(allTypes);
+        graphDataInitialized = true;
+      }
+      
+      // NOW set graphData - this will trigger reactive statements, but enabledNodeTypes is already set
       graphData = {
         nodes: nodes,
         links: edges
       };
+      
       // Performance: Invalidate layout cache when new data is loaded
       cachedLayoutData = null;
       cachedLayoutHash = null;
+      
+      // Small delay to ensure state is settled before updating graph
+      await new Promise(resolve => setTimeout(resolve, 10));
       updateGraph();
       try {
         await cacheManager.saveGraph(graphData);
@@ -437,7 +643,6 @@
 
   function updateGraph() {
     if (!graphInstance) {
-      // console.warn('updateGraph called but graphInstance is not ready');
       return;
     }
     
@@ -502,7 +707,72 @@
       }
     }
     
-    graphInstance.graphData(layoutData);
+    // Force graph update by setting data
+    // Create completely fresh objects to ensure force-graph recognizes them as new
+    // This is critical for nodes that are being reactivated after being filtered out
+    const freshNodes = layoutData.nodes.map(n => {
+      // Create a completely new node object with all properties
+      const newNode = { ...n };
+      // Don't delete x, y as they might be needed for positioning
+      // But clear force-graph internal tracking properties
+      delete newNode.__index;
+      return newNode;
+    });
+    
+    const freshLinks = layoutData.links.map(l => {
+      const sourceId = typeof l.source === 'string' ? l.source : l.source.id;
+      const targetId = typeof l.target === 'string' ? l.target : l.target.id;
+      return {
+        ...l,
+        source: sourceId,
+        target: targetId
+      };
+    });
+    
+    // Resolve source/target to node objects for force-graph
+    const nodeMap = new Map(freshNodes.map(n => [n.id, n]));
+    const resolvedLinks = freshLinks.map(l => ({
+      ...l,
+      source: nodeMap.get(l.source) || l.source,
+      target: nodeMap.get(l.target) || l.target
+    }));
+    
+    // Force a complete graph refresh by clearing first, then setting new data
+    // This ensures force-graph recognizes all nodes as new
+    const currentData = graphInstance.graphData();
+    const currentNodes = currentData?.nodes?.length || 0;
+    const currentLinks = currentData?.links?.length || 0;
+    const needsFullRefresh = currentData && 
+      (currentNodes !== freshNodes.length || 
+       currentLinks !== resolvedLinks.length);
+    
+    if (needsFullRefresh) {
+      // Clear the graph first to force a complete reset
+      graphInstance.graphData({ nodes: [], links: [] });
+      // Wait for the clear to process, then set new data
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          graphInstance.graphData({ nodes: freshNodes, links: resolvedLinks });
+          // Restart simulation
+          if (graphInstance.d3Force) {
+            const force = graphInstance.d3Force();
+            if (force && typeof force.alpha === 'function' && typeof force.restart === 'function') {
+              force.alpha(1).restart();
+            }
+          }
+        });
+      });
+    } else {
+      // If size hasn't changed, just update the data
+      graphInstance.graphData({ nodes: freshNodes, links: resolvedLinks });
+      // Restart simulation to ensure nodes are positioned
+      if (graphInstance.d3Force) {
+        const force = graphInstance.d3Force();
+        if (force && typeof force.alpha === 'function' && typeof force.restart === 'function') {
+          force.alpha(1).restart();
+        }
+      }
+    }
     
     // Performance: Only update forces when graph size changes
     const currentGraphSize = nodeCount;
@@ -577,14 +847,14 @@
       
       // For very large graphs, reduce alpha decay to settle faster
       if (isVeryLargeGraph && graphInstance.d3Force) {
-        graphInstance.d3Force().alphaDecay(0.0228); // Faster decay
+        const force = graphInstance.d3Force();
+        if (force && typeof force.alphaDecay === 'function') {
+          force.alphaDecay(0.0228); // Faster decay
+        }
       }
       
       lastGraphSize = currentGraphSize;
     }
-    
-    // Force a refresh
-    graphInstance.refresh();
   }
 
   async function loadPlugins() {
@@ -657,13 +927,17 @@
       
       // Load the new graph data
       await loadGraph();
+      // Reset node type filter for new data
+      graphDataInitialized = false;
+      enabledNodeTypes = new Set();
       // Give the graph a moment to initialize if needed
       if (!graphInstance && graphContainer) {
         await initGraph();
       }
-      // Small delay to ensure graph instance is ready
-      await new Promise(resolve => setTimeout(resolve, 100));
-      updateGraph();
+      // Ensure graph updates with new data
+      if (graphInstance) {
+        updateGraph();
+      }
     } catch (error) {
       showNotification(`Import failed: ${error.response?.data?.error || error.message}`, 'error');
     } finally {
@@ -720,6 +994,53 @@
     }
   }
 
+  function recenterToNode(node, zoomLevel = 1.5) {
+    if (!graphInstance || !node || node.x === undefined || node.y === undefined) {
+      return;
+    }
+    
+    // Prevent multiple recenters - check if one is in progress or was called recently
+    const now = Date.now();
+    if (isRecenterInProgress || (now - lastRecenterTime < 1500)) {
+      return; // Skip if recenter is in progress or was called less than 1.5s ago
+    }
+    
+    // Don't recenter if user is dragging or scrolling
+    if (isDragging || isScrolling) {
+      return;
+    }
+    
+    // Cancel any pending recenter
+    if (recenterTimeout) {
+      clearTimeout(recenterTimeout);
+    }
+    
+    // Debounce recenter with a longer delay to avoid conflicts with user interactions
+    // This gives time for any drag/pan operations to complete
+    recenterTimeout = setTimeout(() => {
+      // Double-check conditions before recentering
+      if (isDragging || isScrolling || isRecenterInProgress) {
+        recenterTimeout = null;
+        return;
+      }
+      
+      if (graphInstance && node.x !== undefined && node.y !== undefined) {
+        isRecenterInProgress = true;
+        lastRecenterTime = Date.now();
+        
+        // Slower, smoother animation (1200ms instead of 600ms)
+        graphInstance.centerAt(node.x, node.y, 1200);
+        graphInstance.zoom(zoomLevel, 1200);
+        
+        // Reset flag after animation completes
+        setTimeout(() => {
+          isRecenterInProgress = false;
+        }, 1300); // Slightly longer than animation duration
+      }
+      recenterTimeout = null;
+    }, 500); // Longer delay to ensure any user interactions are complete
+  }
+
   function handleNodeClick(node, event) {
     selectedNode = node;
     
@@ -729,14 +1050,14 @@
       } else {
         selectedNodes = [...selectedNodes, node.id];
       }
+      // Don't recenter on multi-select
+      return;
     } else {
       selectedNodes = [node.id];
     }
     
-    if (graphInstance && node.x !== undefined && node.y !== undefined) {
-      graphInstance.centerAt(node.x, node.y, 600);
-      graphInstance.zoom(2, 600);
-    }
+    // Recenter with debouncing
+    recenterToNode(node);
   }
 
   async function handleUndo() {
@@ -783,12 +1104,10 @@
 
   function handleNodeSearch(node) {
     selectedNode = node;
-    if (graphInstance) {
-      const graphNode = graphData.nodes.find(n => n.id === node.id);
-      if (graphNode && graphNode.x !== undefined && graphNode.y !== undefined) {
-        graphInstance.centerAt(graphNode.x, graphNode.y, 600);
-        graphInstance.zoom(2, 600);
-      }
+    const graphNode = graphData.nodes.find(n => n.id === node.id);
+    if (graphNode) {
+      // Use the improved recenter function
+      recenterToNode(graphNode, 1.8); // Slightly higher zoom for search results
     }
   }
 
@@ -885,19 +1204,44 @@
       }
     }
     
-    // Bloodweb-style links - darker, web-like
-    // Performance: Cache level calculations on link object
+    // Color links based on the target node color
+    // Performance: Cache color calculation on link object
     if (link.__color === undefined) {
-    const sourceLevel = link.source?.level || 0;
-    const targetLevel = link.target?.level || 0;
-    const levelDiff = Math.abs(sourceLevel - targetLevel);
-    
-    // Darker links for connections between different levels (web-like)
-    if (levelDiff > 0) {
-        link.__color = `rgba(139, 0, 0, ${0.4 - levelDiff * 0.1})`; // Dark red, fading
+      // Get the target node (where the arrow points)
+      const targetNode = typeof link.target === 'string' 
+        ? graphData?.nodes?.find(n => n.id === link.target)
+        : link.target;
+      
+      if (targetNode) {
+        // Get the target node's color and apply opacity for better visibility
+        const targetColor = nodeColor(targetNode);
+        // Convert hex to rgba with opacity, or use the color as-is if it's already rgba
+        if (targetColor.startsWith('#')) {
+          // Convert hex to rgb
+          const hex = targetColor.replace('#', '');
+          const r = parseInt(hex.substring(0, 2), 16);
+          const g = parseInt(hex.substring(2, 4), 16);
+          const b = parseInt(hex.substring(4, 6), 16);
+          link.__color = `rgba(${r}, ${g}, ${b}, 0.6)`;
+        } else if (targetColor.startsWith('rgba')) {
+          // Already rgba, just adjust opacity
+          link.__color = targetColor.replace(/rgba\(([^)]+)\)/, (match, content) => {
+            const parts = content.split(',').map(s => s.trim());
+            if (parts.length === 4) {
+              return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, 0.6)`;
+            }
+            return match;
+          });
+        } else if (targetColor.startsWith('rgb')) {
+          // Convert rgb to rgba
+          link.__color = targetColor.replace('rgb', 'rgba').replace(')', ', 0.6)');
+        } else {
+          // Fallback: use default with opacity
+          link.__color = 'rgba(105, 105, 105, 0.6)';
+        }
       } else {
-    // Lighter links for same-level connections
-        link.__color = 'rgba(139, 69, 19, 0.3)'; // Saddle brown, subtle
+        // Fallback to default color if target node not found
+        link.__color = 'rgba(105, 105, 105, 0.6)'; // Dim gray with opacity
       }
     }
     return link.__color;
@@ -930,6 +1274,12 @@
     hash += (filteredNodes?.length || 0) * 1000000;
     hash += (graphData.nodes?.length || 0) * 1000;
     hash += (graphData.links?.length || 0);
+    hash += enabledNodeTypes.size * 100; // Include node type filter in hash
+    // Add enabled types to hash
+    const enabledTypesArray = [...enabledNodeTypes].sort();
+    enabledTypesArray.forEach((type, idx) => {
+      hash += type.charCodeAt(0) * (idx + 1);
+    });
     const filterHash = hash.toString();
     
     // Performance: Return cached data if filters haven't changed
@@ -955,7 +1305,43 @@
         })
       };
     } else {
-      result = graphData;
+      // CRITICAL: Create a copy of graphData to avoid mutating the original
+      // This ensures we always filter from the full dataset, not a previously filtered one
+      result = {
+        nodes: [...(graphData.nodes || [])],
+        links: [...(graphData.links || [])]
+      };
+    }
+    
+    // Apply node type filter - always filter based on enabledNodeTypes
+    if (result.nodes && result.nodes.length > 0) {
+      // If types are initialized but none enabled, show nothing
+      if (enabledNodeTypes.size === 0 && graphDataInitialized) {
+        result.nodes = [];
+        result.links = [];
+      } else if (enabledNodeTypes.size > 0) {
+        // Filter nodes by enabled types
+        const filteredNodeIds = new Set();
+        result.nodes = result.nodes.filter(n => {
+          const nodeType = n.type || 'default';
+          const isEnabled = enabledNodeTypes.has(nodeType);
+          if (isEnabled) {
+            filteredNodeIds.add(n.id);
+            return true;
+          }
+          return false;
+        });
+        
+        // Filter links to only include those between visible nodes
+        if (result.links && result.links.length > 0) {
+          result.links = result.links.filter(l => {
+            const sourceId = typeof l.source === 'string' ? l.source : l.source.id;
+            const targetId = typeof l.target === 'string' ? l.target : l.target.id;
+            return filteredNodeIds.has(sourceId) && filteredNodeIds.has(targetId);
+          });
+        }
+      }
+      // If enabledNodeTypes.size === 0 and not initialized, show all (default state)
     }
     
     // Performance: Cache the result
@@ -965,12 +1351,82 @@
     return result;
   }
 
+  // Initialize enabled types when graph data loads (only once, not on every change)
+  // Track the graph data to detect when it's actually a new/different graph
+  let lastGraphDataInitHash = '';
+  let userHasCustomizedTypes = false; // Track if user has manually toggled types
+  
+  // Backup initialization: Only run if loadGraph() didn't initialize (e.g., cached graph load)
+  $: if (graphData?.nodes && graphData.nodes.length > 0 && !loading && !graphDataInitialized && !userHasCustomizedTypes) {
+    // Create a simple hash from node count and first few node IDs to detect graph changes
+    const nodeIds = graphData.nodes.slice(0, 5).map(n => n.id).join(',');
+    const currentHash = `${graphData.nodes.length}-${nodeIds}`;
+    
+    // Only initialize if this is a completely new graph (different hash)
+    if (currentHash !== lastGraphDataInitHash) {
+      const allTypes = new Set(graphData.nodes.map(n => n.type || 'default').filter(Boolean));
+      enabledNodeTypes = new Set(allTypes);
+      graphDataInitialized = true;
+      lastGraphDataInitHash = currentHash;
+    }
+  }
+  
+  // Safety: Re-initialize if somehow enabledNodeTypes is empty but we have data
+  $: if (graphData?.nodes && graphData.nodes.length > 0 && !loading && graphDataInitialized && enabledNodeTypes.size === 0 && !userHasCustomizedTypes) {
+    const allTypes = new Set(graphData.nodes.map(n => n.type || 'default').filter(Boolean));
+    enabledNodeTypes = new Set(allTypes);
+  }
+
+  function toggleNodeType(type) {
+    // Mark that user has customized types - this prevents reactive statement from resetting
+    userHasCustomizedTypes = true;
+    
+    // Safety: If enabledNodeTypes is empty but we have graph data, initialize it first
+    if (enabledNodeTypes.size === 0 && graphData?.nodes && graphData.nodes.length > 0 && graphDataInitialized) {
+      const allTypes = new Set(graphData.nodes.map(n => n.type || 'default').filter(Boolean));
+      enabledNodeTypes = new Set(allTypes);
+    }
+    
+    const wasEnabled = enabledNodeTypes.has(type);
+    const newSet = new Set(enabledNodeTypes);
+    
+    if (wasEnabled) {
+      newSet.delete(type);
+    } else {
+      newSet.add(type);
+    }
+    
+    // Update the Set - this must be a new Set object to trigger reactivity
+    enabledNodeTypes = newSet;
+    
+    // Invalidate ALL caches to force complete update
+    cachedFilteredData = null;
+    cachedFilterHash = null;
+    cachedLayoutData = null;
+    cachedLayoutHash = null;
+    // Reset lastGraphDataHash to force reactive update
+    lastGraphDataHash = '';
+    
+    // Force graph update immediately
+    if (graphInstance) {
+      // Clear graph first to force complete reset
+      graphInstance.graphData({ nodes: [], links: [] });
+      
+      // Use requestAnimationFrame to ensure the Set update has propagated
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          updateGraph();
+        });
+      });
+    }
+  }
+
   // Initialize graph when container is available
   $: if (graphContainer && !graphInstance && typeof window !== 'undefined') {
     (async () => {
       await initGraph();
-      // If we have graph data, update the graph after initialization
-      if (graphData && (graphData.nodes?.length > 0 || graphData.links?.length > 0)) {
+      // If we have graph data and auto-load is not prevented, update the graph after initialization
+      if (!preventAutoLoad && graphData && (graphData.nodes?.length > 0 || graphData.links?.length > 0)) {
         updateGraph();
       }
     })();
@@ -979,7 +1435,9 @@
   // Performance: Only update graph when data actually changes (not just reference)
   // Use hash-based change detection to catch when nodes/links are replaced with same-length arrays
   let lastGraphDataHash = '';
-  $: if (graphInstance && graphData) {
+  // Watch both graphData AND enabledNodeTypes for changes
+  // Reference enabledNodeTypes.size to ensure reactivity
+  $: if (graphInstance && graphData && !preventAutoLoad && enabledNodeTypes.size >= 0) {
     // Create hash from node IDs and link source/target pairs
     // This catches changes even when arrays have same length
     const nodeIds = (graphData.nodes || []).map(n => n.id).sort().join(',');
@@ -988,7 +1446,9 @@
       const targetId = typeof l.target === 'string' ? l.target : (l.target?.id || '');
       return `${sourceId}-${targetId}`;
     }).sort().join(',');
-    const hash = `${(graphData.nodes?.length || 0)}-${(graphData.links?.length || 0)}-${nodeIds}-${linkPairs}`;
+    // Include enabledNodeTypes in hash to trigger update when types change
+    const enabledTypesHash = [...enabledNodeTypes].sort().join(',');
+    const hash = `${(graphData.nodes?.length || 0)}-${(graphData.links?.length || 0)}-${nodeIds}-${linkPairs}-${enabledTypesHash}`;
     
     // Only update if hash changed or it's the first load
     if (hash !== lastGraphDataHash || lastGraphDataHash === '') {
@@ -1017,6 +1477,18 @@
       resizeTimeout = null;
     }
     
+    // Clean up recenter timeout
+    if (recenterTimeout) {
+      clearTimeout(recenterTimeout);
+      recenterTimeout = null;
+    }
+    
+    // Clean up scroll timeout
+    if (scrollTimeout) {
+      clearTimeout(scrollTimeout);
+      scrollTimeout = null;
+    }
+    
     if (resizeObserver) {
       try { resizeObserver.disconnect(); } catch {}
       resizeObserver = null;
@@ -1027,7 +1499,33 @@
   });
 </script>
 
-<div class="app" class:graph-collapsed={graphCollapsed} class:graph-fullscreen={graphFullscreen}>
+<div class="app" class:graph-collapsed={graphCollapsed} class:graph-fullscreen={graphFullscreen} class:has-right-sidebar={!graphFullscreen && graphData?.nodes?.length > 0}>
+  <!-- Cached Graph Dialog -->
+  {#if showCachedGraphDialog}
+    <div 
+      class="modal-overlay" 
+      role="button"
+      tabindex="-1"
+      aria-label="Close dialog"
+      on:click|self={handleCancelCachedGraph}
+      on:keydown={(e) => e.key === 'Escape' && handleCancelCachedGraph()}
+    >
+      <div class="modal-dialog" role="dialog" aria-labelledby="cached-graph-title" aria-modal="true">
+        <h3 id="cached-graph-title">Load Cached Graph?</h3>
+        <p>A cached graph from a previous session was found ({cachedGraphData?.nodes?.length || 0} nodes, {cachedGraphData?.links?.length || 0} edges).</p>
+        <p>Would you like to load it or start fresh?</p>
+        <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;">
+          <Button variant="secondary" on:click={handleCancelCachedGraph} size="sm">
+            Cancel
+          </Button>
+          <Button on:click={handleLoadCachedGraph} size="sm">
+            Load Cached
+          </Button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   {#if !graphFullscreen && !graphCollapsed}
     <button
       type="button"
@@ -1443,6 +1941,17 @@
         {/if}
       </div>
     </div>
+  </div>
+
+  <!-- Right Sidebar: Node Type Filter -->
+  <div class="right-sidebar" class:hidden={graphFullscreen || !graphData?.nodes?.length}>
+    {#if !graphFullscreen && graphData?.nodes?.length > 0}
+      <NodeTypeFilter 
+        graphData={graphData}
+        enabledTypes={enabledNodeTypes}
+        onToggleType={toggleNodeType}
+      />
+    {/if}
   </div>
 </div>
 
