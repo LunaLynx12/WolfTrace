@@ -4,18 +4,44 @@
 
   let groupBy = 'none';
   let customGroup = '';
+  // Performance: Cache last grouping to avoid unnecessary recomputation
+  let lastGroupingHash = '';
 
   $: if (groupBy !== 'none') {
-    handleGroupBy(groupBy);
+    // Performance: Only recompute if grouping actually changed
+    const hash = `${groupBy}-${customGroup}-${graphData?.nodes?.length || 0}`;
+    if (hash !== lastGroupingHash) {
+      lastGroupingHash = hash;
+      handleGroupBy(groupBy);
+    }
+  } else {
+    if (lastGroupingHash !== '') {
+      lastGroupingHash = '';
+      handleGroupBy('none');
+    }
   }
 
+  // Performance: Reuse groups object when possible to reduce memory allocation
+  let cachedGroups = null;
+  let cachedGroupType = null;
+  
   function handleGroupBy(groupType) {
     if (groupType === 'none') {
       if (onGroupChange) onGroupChange(null);
+      cachedGroups = null;
+      cachedGroupType = null;
       return;
     }
 
-    const groups = {};
+    // Performance: Reuse groups object if grouping type hasn't changed
+    // Only create new object if type changed or first time
+    const groups = (cachedGroupType === groupType && cachedGroups) ? cachedGroups : {};
+    
+    // Clear groups if type changed
+    if (cachedGroupType !== groupType) {
+      Object.keys(groups).forEach(key => delete groups[key]);
+      cachedGroupType = groupType;
+    }
     
     graphData.nodes.forEach(node => {
       let groupKey = 'ungrouped';
@@ -28,11 +54,15 @@
         groupKey = node[customGroup] || 'ungrouped';
       }
       
+      // Performance: Reuse array if it exists
       if (!groups[groupKey]) {
         groups[groupKey] = [];
       }
       groups[groupKey].push(node.id);
     });
+    
+    // Cache for reuse
+    cachedGroups = groups;
 
     if (onGroupChange) {
       onGroupChange({

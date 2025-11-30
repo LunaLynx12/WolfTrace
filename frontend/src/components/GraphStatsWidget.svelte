@@ -9,11 +9,29 @@
 
   let stats = null;
   let loading = false;
+  // Performance: Cache hash to prevent unnecessary API calls
+  let lastStatsHash = '';
+  // Performance: Cache Object.entries() to avoid recalculating on every render
+  let nodeTypesEntries = [];
 
   $: if (graphData && graphData.nodes && graphData.nodes.length > 0) {
-    loadStats();
+    // Performance: Only load stats if data actually changed
+    const hash = `${graphData.nodes.length}-${graphData.links.length}`;
+    if (hash !== lastStatsHash) {
+      lastStatsHash = hash;
+      loadStats();
+    }
   } else {
     stats = null;
+    lastStatsHash = '';
+    nodeTypesEntries = [];
+  }
+  
+  // Performance: Cache Object.entries() result in reactive statement
+  $: if (stats && stats.node_types) {
+    nodeTypesEntries = Object.entries(stats.node_types).slice(0, 5);
+  } else {
+    nodeTypesEntries = [];
   }
 
   async function loadStats() {
@@ -79,7 +97,7 @@
       {#if stats.node_types}
         <div style="margin-top: 10px;">
           <div style="font-size: 12px; color: #aaa; margin-bottom: 5px;">Node Types:</div>
-          {#each Object.entries(stats.node_types).slice(0, 5) as [type, count]}
+          {#each nodeTypesEntries as [type, count]}
             <div style="font-size: 11px; color: #888; margin-bottom: 2px;">
               {type}: {count}
             </div>

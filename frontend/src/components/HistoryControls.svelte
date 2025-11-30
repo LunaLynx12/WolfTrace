@@ -1,7 +1,8 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import axios from 'axios';
   import Button from './ui/Button.svelte';
+  import { showNotification } from '../utils/notifications.js';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -9,11 +10,20 @@
 
   let historyInfo = null;
   let loading = false;
+  // Memory leak fix: Store interval reference for cleanup
+  let historyInterval = null;
 
   onMount(() => {
     loadHistoryInfo();
-    const interval = setInterval(loadHistoryInfo, 2000);
-    return () => clearInterval(interval);
+    historyInterval = setInterval(loadHistoryInfo, 2000);
+  });
+  
+  // Memory leak fix: Explicitly clean up interval on destroy
+  onDestroy(() => {
+    if (historyInterval) {
+      clearInterval(historyInterval);
+      historyInterval = null;
+    }
   });
 
   async function loadHistoryInfo() {
@@ -35,7 +45,7 @@
       }
     } catch (error) {
       if (error.response?.status !== 400) {
-        alert(`Undo failed: ${error.response?.data?.error || error.message}`);
+        showNotification(`Undo failed: ${error.response?.data?.error || error.message}`, 'error');
       }
     } finally {
       loading = false;
@@ -52,7 +62,7 @@
       }
     } catch (error) {
       if (error.response?.status !== 400) {
-        alert(`Redo failed: ${error.response?.data?.error || error.message}`);
+        showNotification(`Redo failed: ${error.response?.data?.error || error.message}`, 'error');
       }
     } finally {
       loading = false;

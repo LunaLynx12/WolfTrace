@@ -1,6 +1,7 @@
 <script>
   import axios from 'axios';
   import Button from './ui/Button.svelte';
+  import { showNotification } from '../utils/notifications.js';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -13,7 +14,7 @@
 
   async function handleBulkDelete() {
     if (!selectedNodes || selectedNodes.length === 0) {
-      alert('Please select nodes first');
+      showNotification('Please select nodes first', 'error');
       return;
     }
 
@@ -26,10 +27,10 @@
       await axios.post(`${API_BASE}/bulk/nodes/delete`, {
         node_ids: selectedNodes
       });
-      alert(`Successfully deleted ${selectedNodes.length} nodes`);
+      showNotification(`Successfully deleted ${selectedNodes.length} nodes`, 'success');
       if (onOperationComplete) onOperationComplete();
     } catch (error) {
-      alert(`Failed: ${error.response?.data?.error || error.message}`);
+      showNotification(`Failed: ${error.response?.data?.error || error.message}`, 'error');
     } finally {
       loading = false;
     }
@@ -37,13 +38,13 @@
 
   async function handleBulkTag() {
     if (!selectedNodes || selectedNodes.length === 0) {
-      alert('Please select nodes first');
+      showNotification('Please select nodes first', 'error');
       return;
     }
 
     const tagList = tags.split(',').map(t => t.trim()).filter(t => t);
     if (tagList.length === 0) {
-      alert('Please enter at least one tag');
+      showNotification('Please enter at least one tag', 'error');
       return;
     }
 
@@ -53,10 +54,10 @@
         node_ids: selectedNodes,
         tags: tagList
       });
-      alert(`Tagged ${selectedNodes.length} nodes`);
+      showNotification(`Tagged ${selectedNodes.length} nodes`, 'success');
       if (onOperationComplete) onOperationComplete();
     } catch (error) {
-      alert(`Failed: ${error.response?.data?.error || error.message}`);
+      showNotification(`Failed: ${error.response?.data?.error || error.message}`, 'error');
     } finally {
       loading = false;
     }

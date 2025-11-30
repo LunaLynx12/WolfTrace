@@ -153,8 +153,13 @@ class CacheManager {
         // Check if expired
         const age = Date.now() - result.timestamp;
         if (age > result.ttl) {
-          // Delete expired cache
-          store.delete(key);
+          // Performance: Delete expired cache asynchronously to avoid blocking read operation
+          // Use setTimeout to defer deletion
+          setTimeout(() => {
+            const deleteTransaction = this.db.transaction([STORES.CACHE], 'readwrite');
+            const deleteStore = deleteTransaction.objectStore(STORES.CACHE);
+            deleteStore.delete(key);
+          }, 0);
           resolve(null);
           return;
         }

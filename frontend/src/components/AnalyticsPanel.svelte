@@ -8,6 +8,8 @@
   let communities = [];
   let loading = false;
   let activeTab = 'stats';
+  // Performance: Cache Object.entries() to avoid recalculating on every render
+  let nodeTypesEntries = [];
 
   onMount(() => {
     loadStats();
@@ -16,16 +18,32 @@
   async function loadStats() {
     loading = true;
     try {
-      const [statsRes, commRes] = await Promise.all([
-        axios.get(`${API_BASE}/analytics/stats`),
-        axios.get(`${API_BASE}/analytics/communities`)
-      ]);
+      // Performance: Only load stats on mount, communities will be lazy loaded
+      const statsRes = await axios.get(`${API_BASE}/analytics/stats`);
       stats = statsRes.data;
-      communities = commRes.data;
     } catch (error) {
       console.error('Failed to load analytics:', error);
     } finally {
       loading = false;
+    }
+  }
+  
+  // Performance: Cache Object.entries() result in reactive statement
+  $: if (stats && stats.node_types) {
+    nodeTypesEntries = Object.entries(stats.node_types);
+  } else {
+    nodeTypesEntries = [];
+  }
+
+  // Performance: Lazy load communities only when tab is clicked
+  async function loadCommunities() {
+    if (communities.length > 0) return; // Already loaded
+    
+    try {
+      const commRes = await axios.get(`${API_BASE}/analytics/communities`);
+      communities = commRes.data;
+    } catch (error) {
+      console.error('Failed to load communities:', error);
     }
   }
 </script>
@@ -50,7 +68,10 @@
       <button
         class="tab"
         class:tab-active={activeTab === 'communities'}
-        on:click={() => activeTab = 'communities'}
+        on:click={() => {
+          activeTab = 'communities';
+          loadCommunities(); // Lazy load when tab is clicked
+        }}
       >
         Communities
       </button>
@@ -98,7 +119,7 @@
           <div class="stat-section">
             <h3>Node Types</h3>
             <div class="type-distribution">
-              {#each Object.entries(stats.node_types) as [type, count]}
+              {#each nodeTypesEntries as [type, count]}
                 <div class="type-item">
                   <span>{type}</span>
                   <span>{count}</span>
