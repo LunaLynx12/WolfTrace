@@ -1,6 +1,8 @@
 """
 Network Topology Plugin - Processes network scan data
-Supports: standard format, RustScan, Gobuster, Dig, and merged formats
+Supports: standard format, RustScan, Gobuster, Dig, HTTPX, WhatWeb, WAFW00F,
+GeoIP, Certificate Transparency, WHOIS, Network Topology, IP-Domain Mapping,
+Nikto, Nuclei, and merged formats
 """
 from typing import Dict, Any, List
 import logging
@@ -82,6 +84,8 @@ def process(data: Any, graph_engine) -> Dict[str, Any]:
         'whois_ips': process_whois_ips,
         'network_topology': process_network_topology,
         'ip_domain_mapping': process_ip_domain_mapping,
+        'nikto': process_nikto,
+        'nuclei': process_nuclei,
     }
     
     for tool_name, processor_func in tool_processors.items():
@@ -280,6 +284,33 @@ def process(data: Any, graph_engine) -> Dict[str, Any]:
                 logger.info(f"Domain WHOIS: Added {result.get('nodes_added', 0)} nodes, {result.get('edges_added', 0)} edges")
             except Exception as e:
                 logger.error(f"Error processing Domain WHOIS: {str(e)}", exc_info=True)
+    
+    # Check for Nikto format - has data.vulnerabilities array
+    if 'data' in data and 'vulnerabilities' in data.get('data', {}):
+        scan_data = data.get('data', {})
+        if isinstance(scan_data.get('vulnerabilities'), list) and 'scan_info' in scan_data:
+            try:
+                logger.info("Detected Nikto format (individual file)")
+                result = process_nikto(data, graph_engine)
+                nodes_added += result.get('nodes_added', 0)
+                edges_added += result.get('edges_added', 0)
+                logger.info(f"Nikto: Added {result.get('nodes_added', 0)} nodes, {result.get('edges_added', 0)} edges")
+            except Exception as e:
+                logger.error(f"Error processing Nikto: {str(e)}", exc_info=True)
+    
+    # Check for Nuclei format - has data.findings array
+    if 'data' in data and 'findings' in data.get('data', {}):
+        scan_data = data.get('data', {})
+        findings = scan_data.get('findings', [])
+        if isinstance(findings, list) and len(findings) > 0 and 'template' in findings[0]:
+            try:
+                logger.info("Detected Nuclei format (individual file)")
+                result = process_nuclei(data, graph_engine)
+                nodes_added += result.get('nodes_added', 0)
+                edges_added += result.get('edges_added', 0)
+                logger.info(f"Nuclei: Added {result.get('nodes_added', 0)} nodes, {result.get('edges_added', 0)} edges")
+            except Exception as e:
+                logger.error(f"Error processing Nuclei: {str(e)}", exc_info=True)
     
     # Check for Network Topology - has nodes and edges arrays (even if mixed with other keys)
     if 'nodes' in data and 'edges' in data:
@@ -1134,6 +1165,222 @@ def process_ip_domain_mapping(data: Dict[str, Any], graph_engine) -> Dict[str, A
                 {'tool': 'ip_domain_mapping'}
             )
             edges_added += 1
+    
+    return {'nodes_added': nodes_added, 'edges_added': edges_added}
+
+def process_nikto(data: Dict[str, Any], graph_engine) -> Dict[str, Any]:
+    """Process Nikto format - Web server vulnerability scanner results"""
+    nodes_added = 0
+    edges_added = 0
+    
+    target = data.get('target', 'unknown')
+    port = data.get('port', 80)
+    ssl = data.get('ssl', False)
+    
+    # Extract domain/IP from target
+    if '://' in target:
+        target = target.split('://')[1].split('/')[0]
+    
+    scan_data = data.get('data', {})
+    scan_info = scan_data.get('scan_info', {})
+    target_ip = scan_info.get('target_ip') or target
+    target_hostname = scan_info.get('target_hostname') or target
+    server = scan_info.get('server', '')
+    
+    vulnerabilities = scan_data.get('vulnerabilities', [])
+    statistics = scan_data.get('statistics', {})
+    
+    # Add target host node
+    if target_hostname:
+        graph_engine.add_node(
+            target_hostname,
+            'Host',
+            {
+                'hostname': target_hostname,
+                'ip': target_ip,
+                'port': port,
+                'ssl': ssl,
+                'server': server,
+                'tool': 'nikto',
+                'vulnerabilities_count': len(vulnerabilities),
+                'total_vulnerabilities': statistics.get('total_vulnerabilities', 0),
+                'severity_breakdown': statistics.get('by_severity', {})
+            }
+        )
+        nodes_added += 1
+    
+    # Add IP node if different from hostname
+    if target_ip and target_ip != target_hostname:
+        graph_engine.add_node(
+            target_ip,
+            'IP',
+            {
+                'ip': target_ip,
+                'tool': 'nikto'
+            }
+        )
+        nodes_added += 1
+        
+        # Connect hostname to IP
+        if target_hostname:
+            graph_engine.add_edge(
+                target_hostname,
+                target_ip,
+                'RESOLVES_TO',
+                {'tool': 'nikto'}
+            )
+            edges_added += 1
+    
+    # Process vulnerabilities
+    for vuln in vulnerabilities:
+        if not isinstance(vuln, dict):
+            continue
+        
+        path = vuln.get('path', '/')
+        severity = vuln.get('severity', 'info')
+        category = vuln.get('category', 'unknown')
+        description = vuln.get('description', '')
+        
+        # Create vulnerability node
+        vuln_id = f"{target_hostname}:{port}:{path}:{severity}"
+        graph_engine.add_node(
+            vuln_id,
+            'Vulnerability',
+            {
+                'path': path,
+                'severity': severity,
+                'category': category,
+                'description': description[:200],  # Limit description length
+                'host': target_hostname,
+                'port': port,
+                'tool': 'nikto'
+            }
+        )
+        nodes_added += 1
+        
+        # Connect host to vulnerability
+        if target_hostname:
+            graph_engine.add_edge(
+                target_hostname,
+                vuln_id,
+                'HAS_VULNERABILITY',
+                {
+                    'severity': severity,
+                    'category': category,
+                    'tool': 'nikto'
+                }
+            )
+            edges_added += 1
+    
+    return {'nodes_added': nodes_added, 'edges_added': edges_added}
+
+def process_nuclei(data: Dict[str, Any], graph_engine) -> Dict[str, Any]:
+    """Process Nuclei format - Vulnerability scanner results"""
+    nodes_added = 0
+    edges_added = 0
+    
+    target = data.get('target', 'unknown')
+    scan_data = data.get('data', {})
+    findings = scan_data.get('findings', [])
+    
+    # Extract domain/IP from target
+    if '://' in target:
+        target = target.split('://')[1].split('/')[0]
+    
+    # Add target domain/host node
+    if target:
+        graph_engine.add_node(
+            target,
+            'Host',
+            {
+                'hostname': target,
+                'tool': 'nuclei',
+                'findings_count': len(findings)
+            }
+        )
+        nodes_added += 1
+    
+    # Process each finding
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        
+        info = finding.get('info', {})
+        template_id = finding.get('template-id', '')
+        template_name = info.get('name', 'Unknown')
+        severity = info.get('severity', 'info')
+        host = finding.get('host', target)
+        port = finding.get('port', '')
+        url = finding.get('url', '')
+        matched_at = finding.get('matched-at', url)
+        
+        classification = info.get('classification', {})
+        cve_id = classification.get('cve-id')
+        cwe_ids = classification.get('cwe-id', [])
+        
+        # Extract IP if available
+        finding_ip = finding.get('ip')
+        
+        # Create vulnerability/finding node
+        finding_id = f"{host}:{template_id}:{severity}"
+        if url:
+            finding_id = f"{url}:{template_id}"
+        
+        graph_engine.add_node(
+            finding_id,
+            'Vulnerability' if severity in ['critical', 'high', 'medium'] else 'Finding',
+            {
+                'template_id': template_id,
+                'template_name': template_name,
+                'severity': severity,
+                'host': host,
+                'port': port,
+                'url': url,
+                'matched_at': matched_at,
+                'cve_id': cve_id,
+                'cwe_ids': cwe_ids,
+                'description': info.get('description', '')[:200],
+                'ip': finding_ip,
+                'tool': 'nuclei'
+            }
+        )
+        nodes_added += 1
+        
+        # Connect target to finding
+        if target:
+            graph_engine.add_edge(
+                target,
+                finding_id,
+                'HAS_FINDING' if severity in ['info', 'low'] else 'HAS_VULNERABILITY',
+                {
+                    'severity': severity,
+                    'template_id': template_id,
+                    'tool': 'nuclei'
+                }
+            )
+            edges_added += 1
+        
+        # Add IP node if found and different from host
+        if finding_ip and finding_ip != host:
+            graph_engine.add_node(
+                finding_ip,
+                'IP',
+                {
+                    'ip': finding_ip,
+                    'tool': 'nuclei'
+                }
+            )
+            nodes_added += 1
+            
+            # Connect host to IP
+            if host:
+                graph_engine.add_edge(
+                    host,
+                    finding_ip,
+                    'RESOLVES_TO',
+                    {'tool': 'nuclei'}
+                )
+                edges_added += 1
     
     return {'nodes_added': nodes_added, 'edges_added': edges_added}
 

@@ -1,6 +1,7 @@
 <script>
   import axios from 'axios';
   import Button from './ui/Button.svelte';
+  import { showNotification } from '../utils/notifications.js';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -37,9 +38,9 @@
         URL.revokeObjectURL(url);
       }
       
-      alert('Report generated successfully!');
+      showNotification('Report generated successfully!', 'success');
     } catch (error) {
-      alert(`Failed to generate report: ${error.message}`);
+      showNotification(`Failed to generate report: ${error.message}`, 'error');
     } finally {
       loading = false;
     }

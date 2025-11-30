@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import axios from 'axios';
   import Button from './ui/Button.svelte';
+  import { showNotification } from '../utils/notifications.js';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -13,23 +14,34 @@
   let sessionName = '';
   let sessionDescription = '';
   let loading = false;
+  let sessionsLoaded = false;
 
-  onMount(() => {
-    loadSessions();
-  });
-
+  // Performance: Lazy load sessions only when component becomes visible
   async function loadSessions() {
+    if (sessionsLoaded) return; // Already loaded
+    
     try {
       const response = await axios.get(`${API_BASE}/sessions`);
       sessions = response.data;
+      sessionsLoaded = true;
     } catch (error) {
       console.error('Failed to load sessions:', error);
     }
   }
 
+  // Load sessions when component is first rendered (deferred)
+  $: if (!sessionsLoaded && sessions.length === 0) {
+    // Use requestIdleCallback or setTimeout to defer loading
+    if (typeof requestIdleCallback !== 'undefined') {
+      requestIdleCallback(() => loadSessions());
+    } else {
+      setTimeout(() => loadSessions(), 200);
+    }
+  }
+
   async function saveSession() {
     if (!sessionName.trim()) {
-      alert('Please enter a session name');
+      showNotification('Please enter a session name', 'error');
       return;
     }
 
@@ -44,13 +56,13 @@
         }
       });
       
-      alert('Session saved successfully!');
+      showNotification('Session saved successfully!', 'success');
       showSaveDialog = false;
       sessionName = '';
       sessionDescription = '';
       loadSessions();
     } catch (error) {
-      alert(`Failed to save session: ${error.response?.data?.error || error.message}`);
+      showNotification(`Failed to save session: ${error.response?.data?.error || error.message}`, 'error');
     } finally {
       loading = false;
     }
@@ -60,8 +72,9 @@
     try {
       const response = await axios.get(`${API_BASE}/sessions/${sessionId}/restore`);
       if (onLoadSession) onLoadSession();
+      showNotification('Session loaded', 'success');
     } catch (error) {
-      alert(`Failed to load session: ${error.message}`);
+      showNotification(`Failed to load session: ${error.message}`, 'error');
     }
   }
 
@@ -69,9 +82,10 @@
     if (!window.confirm('Delete this session?')) return;
     try {
       await axios.delete(`${API_BASE}/sessions/${sessionId}`);
+      showNotification('Session deleted', 'success');
       loadSessions();
     } catch (error) {
-      alert(`Failed to delete session: ${error.message}`);
+      showNotification(`Failed to delete session: ${error.message}`, 'error');
     }
   }
 </script>

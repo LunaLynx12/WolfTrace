@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import axios from 'axios';
   import Button from './ui/Button.svelte';
+  import { showNotification } from '../utils/notifications.js';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -12,17 +13,28 @@
   let variables = {};
   let loading = false;
   let templateDetails = null;
+  let templatesLoaded = false;
 
-  onMount(() => {
-    loadTemplates();
-  });
-
+  // Performance: Lazy load templates only when component becomes visible
   async function loadTemplates() {
+    if (templatesLoaded) return; // Already loaded
+    
     try {
       const response = await axios.get(`${API_BASE}/templates`);
       templates = response.data;
+      templatesLoaded = true;
     } catch (error) {
       console.error('Failed to load templates:', error);
+    }
+  }
+
+  // Load templates when component is first rendered (deferred)
+  $: if (!templatesLoaded && templates.length === 0) {
+    // Use requestIdleCallback or setTimeout to defer loading
+    if (typeof requestIdleCallback !== 'undefined') {
+      requestIdleCallback(() => loadTemplates());
+    } else {
+      setTimeout(() => loadTemplates(), 200);
     }
   }
 
@@ -43,7 +55,7 @@
 
   async function applyTemplate() {
     if (!selectedTemplate) {
-      alert('Please select a template');
+      showNotification('Please select a template', 'error');
       return;
     }
 
@@ -53,11 +65,11 @@
         variables: variables
       });
       
-      alert(`Template applied: ${response.data.nodes_added} nodes, ${response.data.edges_added} edges added`);
+      showNotification(`Template applied: ${response.data.nodes_added} nodes, ${response.data.edges_added} edges added`, 'success');
       if (onTemplateApplied) onTemplateApplied();
       variables = {};
     } catch (error) {
-      alert(`Failed to apply template: ${error.response?.data?.error || error.message}`);
+      showNotification(`Failed to apply template: ${error.response?.data?.error || error.message}`, 'error');
     } finally {
       loading = false;
     }

@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import axios from 'axios';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -18,6 +18,14 @@
   };
   let showFilters = false;
   let searchTimeout;
+  
+  // Memory leak fix: Clean up timeout on component destroy
+  onDestroy(() => {
+    if (searchTimeout) {
+      clearTimeout(searchTimeout);
+      searchTimeout = null;
+    }
+  });
 
   $: if (query.length > 2 || filters.nodeType || filters.hasProperty) {
     clearTimeout(searchTimeout);
@@ -33,14 +41,26 @@
       if (allNodes && allNodes.length > 0) {
         let filtered = allNodes;
         
-        if (searchQuery) {
-          const lowerQuery = searchQuery.toLowerCase();
+        // Performance: Pre-compute lowercase query once
+        const lowerQuery = searchQuery ? searchQuery.toLowerCase() : '';
+        
+        if (lowerQuery) {
+          // Performance: More efficient filtering - check ID first (most common case)
+          // Avoid Object.values() which creates new array on every check
           filtered = filtered.filter(node => {
-            const idMatch = (node.id || '').toLowerCase().includes(lowerQuery);
-            const propsMatch = Object.values(node).some(val => 
-              typeof val === 'string' && val.toLowerCase().includes(lowerQuery)
-            );
-            return idMatch || propsMatch;
+            const nodeId = (node.id || '').toLowerCase();
+            if (nodeId.includes(lowerQuery)) return true;
+            
+            // Only check properties if ID doesn't match - iterate keys directly
+            // This avoids creating Object.values() array
+            for (const key in node) {
+              if (key === 'id') continue; // Already checked
+              const val = node[key];
+              if (typeof val === 'string' && val.toLowerCase().includes(lowerQuery)) {
+                return true;
+              }
+            }
+            return false;
           });
         }
         
@@ -81,11 +101,13 @@
     if (onSearch) onSearch(node);
   }
 
-  function getUniqueNodeTypes() {
+  // Performance: Cache unique node types to avoid recalculating on every render
+  let uniqueTypes = [];
+  $: uniqueTypes = (() => {
     if (!allNodes || allNodes.length === 0) return [];
     const types = new Set(allNodes.map(n => n.type).filter(Boolean));
     return Array.from(types).sort();
-  }
+  })();
 </script>
 
 <div class="search-container">
@@ -121,7 +143,7 @@
           style="font-size: 12px;"
         >
           <option value="">All Types</option>
-          {#each getUniqueNodeTypes() as type}
+          {#each uniqueTypes as type}
             <option value={type}>{type}</option>
           {/each}
         </select>

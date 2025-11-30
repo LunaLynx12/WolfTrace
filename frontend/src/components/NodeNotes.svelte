@@ -10,21 +10,54 @@
   let note = '';
   let saving = false;
   let notes = [];
+  // Performance: Cache node ID and notes hash to avoid unnecessary recalculations
+  let lastNodeId = null;
+  let lastNotesHash = '';
+  // Performance: Cache formatted dates to avoid recalculating on every render
+  let formattedNotes = [];
 
   $: if (node) {
-    const nodeNotes = node.notes || node._notes || [];
-    notes = Array.isArray(nodeNotes) ? nodeNotes : [];
+    // Performance: Only recalculate if node actually changed
+    if (node.id !== lastNodeId) {
+      lastNodeId = node.id;
+      const nodeNotes = node.notes || node._notes || [];
+      notes = Array.isArray(nodeNotes) ? nodeNotes : [];
+      // Create hash of notes to detect changes
+      lastNotesHash = JSON.stringify(notes.map(n => n.id).sort());
+    } else {
+      // Check if notes changed for same node
+      const nodeNotes = node.notes || node._notes || [];
+      const currentNotes = Array.isArray(nodeNotes) ? nodeNotes : [];
+      const currentHash = JSON.stringify(currentNotes.map(n => n.id).sort());
+      if (currentHash !== lastNotesHash) {
+        lastNotesHash = currentHash;
+        notes = currentNotes;
+      }
+    }
+  } else {
+    lastNodeId = null;
+    lastNotesHash = '';
+    notes = [];
+    formattedNotes = [];
   }
+  
+  // Performance: Format dates once in reactive statement instead of in template
+  $: formattedNotes = notes.map(n => ({
+    ...n,
+    formattedTimestamp: n.formattedTimestamp || (n.timestamp ? new Date(n.timestamp).toLocaleString() : '')
+  }));
 
   async function saveNote() {
     if (!note.trim() || !node) return;
 
     saving = true;
     try {
+      const now = new Date();
       const newNote = {
         id: Date.now(),
         text: note,
-        timestamp: new Date().toISOString(),
+        timestamp: now.toISOString(),
+        formattedTimestamp: now.toLocaleString(), // Performance: Format date when saving
         author: 'User'
       };
 
@@ -43,8 +76,9 @@
       notes = updatedNotes;
       note = '';
       if (onNoteUpdate) onNoteUpdate(node.id, updatedNotes);
+      showNotification('Note saved', 'success');
     } catch (error) {
-      alert(`Failed to save note: ${error.message}`);
+      showNotification(`Failed to save note: ${error.message}`, 'error');
     } finally {
       saving = false;
     }
@@ -68,8 +102,9 @@
 
       notes = updatedNotes;
       if (onNoteUpdate) onNoteUpdate(node.id, updatedNotes);
+      showNotification('Note deleted', 'success');
     } catch (error) {
-      alert(`Failed to delete note: ${error.message}`);
+      showNotification(`Failed to delete note: ${error.message}`, 'error');
     }
   }
 </script>
@@ -86,12 +121,12 @@
       {#if notes.length === 0}
         <div style="color: #888; font-size: 12px; font-style: italic;">No notes yet</div>
       {:else}
-        {#each notes as n}
+        {#each formattedNotes as n}
           <div class="note-item" style="background: #333; padding: 8px; margin-bottom: 5px; border-radius: 4px; font-size: 12px;">
             <div style="color: #e0e0e0; margin-bottom: 5px;">{n.text}</div>
             <div style="display: flex; justify-content: space-between; align-items: center;">
               <small style="color: #888; font-size: 10px;">
-                {new Date(n.timestamp).toLocaleString()}
+                {n.formattedTimestamp || (n.timestamp ? new Date(n.timestamp).toLocaleString() : '')}
               </small>
               <button
                 on:click={() => deleteNote(n.id)}

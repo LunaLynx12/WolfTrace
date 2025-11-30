@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import axios from 'axios';
   import Button from './ui/Button.svelte';
+  import { showNotification } from '../utils/notifications.js';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -16,17 +17,32 @@
   let queryResult = null;
   let loading = false;
   let availableTypes = [];
+  let typesLoaded = false;
 
-  onMount(async () => {
+  // Performance: Lazy load node types only when component becomes visible
+  async function loadNodeTypes() {
+    if (typesLoaded) return; // Already loaded
+    
     try {
       const response = await axios.get(`${API_BASE}/analytics/stats`);
       if (response.data.node_types) {
         availableTypes = Object.keys(response.data.node_types);
+        typesLoaded = true;
       }
     } catch (error) {
       console.error('Failed to load node types:', error);
     }
-  });
+  }
+
+  // Load types when component is first rendered (but not on mount to avoid blocking)
+  $: if (!typesLoaded && availableTypes.length === 0) {
+    // Use requestIdleCallback or setTimeout to defer loading
+    if (typeof requestIdleCallback !== 'undefined') {
+      requestIdleCallback(() => loadNodeTypes());
+    } else {
+      setTimeout(() => loadNodeTypes(), 100);
+    }
+  }
 
   function toggleNodeType(type) {
     if (filters.node_type.includes(type)) {
@@ -60,7 +76,7 @@
         onQueryResult(response.data);
       }
     } catch (error) {
-      alert(`Query failed: ${error.response?.data?.error || error.message}`);
+      showNotification(`Query failed: ${error.response?.data?.error || error.message}`, 'error');
     } finally {
       loading = false;
     }
