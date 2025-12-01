@@ -1169,6 +1169,15 @@
     // Performance: Use Set for O(1) lookups instead of Array.includes() O(n)
     if (selectedNodesSet && selectedNodesSet.has(node.id)) return '#FFD700';
     if (highlightedPathSet && highlightedPathSet.has(node.id)) return '#FFD700';
+    
+    // Compliance status coloring (green for passed, red for failed)
+    if (node.compliance_status === 'passed') return '#4CAF50'; // Green
+    if (node.compliance_status === 'failed') return '#f44336'; // Red
+    
+    // Status field (alternative naming)
+    if (node.status === 'passed') return '#4CAF50'; // Green
+    if (node.status === 'failed') return '#f44336'; // Red
+    
     if (diffGraph && node.change_type) {
       if (node.change_type === 'added') return '#4CAF50';
       if (node.change_type === 'removed') return '#f44336';

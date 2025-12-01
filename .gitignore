@@ -94,3 +94,6 @@ coverage/
 
 # Real data (sensitive/private)
 real_data/
+
+# Projects folder (contains separate projects like Alina)
+projects/

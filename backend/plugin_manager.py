@@ -130,6 +130,51 @@ class PluginDetector:
     
     
     
+    def detect_compliance(self, data: Any) -> Optional[str]:
+        """Detect compliance data from Alina Compliance Agent"""
+        if 'compliance' not in self.plugins:
+            return None
+        
+        if not isinstance(data, dict):
+            return None
+        
+        # Check for compliance-specific indicators
+        # Check metadata.json structure
+        if 'agent_type' in data:
+            if data.get('agent_type') == 'compliance':
+                return 'compliance'
+        
+        if 'tool' in data:
+            tool_value = str(data.get('tool', '')).lower()
+            if 'alina' in tool_value and 'compliance' in tool_value:
+                return 'compliance'
+        
+        # Check for compliance_checks.json structure
+        if 'compliance_results' in data or 'checks' in data:
+            # Verify it's compliance data, not something else
+            checks = data.get('checks', [])
+            if checks and isinstance(checks, list):
+                # Check if checks have compliance-specific fields
+                first_check = checks[0] if checks else {}
+                if 'standard' in first_check or 'compliance' in str(first_check).lower():
+                    return 'compliance'
+        
+        # Check for standards.json structure
+        if 'standards' in data:
+            standards = data.get('standards', [])
+            if standards and isinstance(standards, list):
+                first_standard = standards[0] if standards else {}
+                if 'region' in first_standard or 'id' in first_standard:
+                    return 'compliance'
+        
+        # Check for system_config.json with compliance context
+        if 'system_info' in data and 'configurations' in data:
+            # Only if we also have compliance indicators elsewhere
+            if 'standards_checked' in data or 'compliance_score' in data:
+                return 'compliance'
+        
+        return None
+    
     def detect_iam(self, data: Any) -> Optional[str]:
         """Detect IAM (Identity and Access Management) data"""
         if 'iam' not in self.plugins:
@@ -177,7 +222,7 @@ class PluginDetector:
         test_engine = self._get_test_engine()
         
         # Try plugins in order (prioritize specific ones first)
-        priority_order = ['web', 'iam']
+        priority_order = ['compliance', 'web', 'iam']
         
         # First try priority plugins
         for plugin_name in priority_order:
@@ -364,13 +409,19 @@ class PluginManager:
             return None
         
         # Detection order (most specific first):
-        # 1. Web (metadata.json based detection)
-        # 2. IAM (specific structure)
-        # 3. Plugin test fallback
+        # 1. Compliance (Alina Compliance Agent - check before web to avoid conflicts)
+        # 2. Web (metadata.json based detection)
+        # 3. IAM (specific structure)
+        # 4. Plugin test fallback
         
         # Dict data detection
         if isinstance(data, dict):
-            # Check metadata.json first (highest priority for real data)
+            # Check compliance plugin first (most specific)
+            result = self.detector.detect_compliance(data)
+            if result:
+                return result
+            
+            # Check web plugin
             result = self.detector.detect_web(data)
             if result:
                 return result

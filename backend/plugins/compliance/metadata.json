@@ -1,0 +1,14 @@
+{
+  "name": "compliance",
+  "version": "1.0.0",
+  "description": "Compliance checking data processor for Alina Compliance Agent output",
+  "supported_formats": ["json"],
+  "detection_keys": [
+    "agent_type",
+    "compliance",
+    "Alina Compliance Agent",
+    "standards_checked",
+    "compliance_checks"
+  ]
+}
+
