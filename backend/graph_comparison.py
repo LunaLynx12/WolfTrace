@@ -105,8 +105,8 @@ class GraphComparison:
         """Normalize edges to a dictionary keyed by (source, target, type)"""
         normalized = {}
         for edge in edges:
-            source = edge.get('source') or edge.get('source_id', '')
-            target = edge.get('target') or edge.get('target_id', '')
+            source = edge.get('source', '')
+            target = edge.get('target', '')
             edge_type = edge.get('type', 'RELATED_TO')
             key = f"{source}::{target}::{edge_type}"
             normalized[key] = edge
@@ -157,8 +157,8 @@ class GraphComparison:
         
         # Add edges with change indicators
         for edge in comparison_result['edges']['added']:
-            source = edge.get('source') or edge.get('source_id', '')
-            target = edge.get('target') or edge.get('target_id', '')
+            source = edge.get('source', '')
+            target = edge.get('target', '')
             links.append({
                 **edge,
                 'source': f"added_{source}" if any(n['id'] == source and n.get('change_type') == 'added' for n in nodes) else source,
@@ -167,8 +167,8 @@ class GraphComparison:
             })
         
         for edge in comparison_result['edges']['removed']:
-            source = edge.get('source') or edge.get('source_id', '')
-            target = edge.get('target') or edge.get('target_id', '')
+            source = edge.get('source', '')
+            target = edge.get('target', '')
             links.append({
                 **edge,
                 'source': f"removed_{source}" if any(n['id'] == source and n.get('change_type') == 'removed' for n in nodes) else source,

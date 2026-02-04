@@ -3,6 +3,7 @@
   import axios from 'axios';
   import Button from './ui/Button.svelte';
   import { showNotification } from '../utils/notifications.js';
+  import { getErrorMessage } from '../utils/api.js';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -50,7 +51,7 @@
         edges: response.data.graph?.edges || []
       });
     } catch (error) {
-      showNotification(`Failed to load session: ${error.message}`, 'error');
+      showNotification(`Failed to load session: ${getErrorMessage(error)}`, 'error');
     }
   }
 
@@ -83,7 +84,7 @@
         });
       }
     } catch (error) {
-      showNotification(`Comparison failed: ${error.response?.data?.error || error.message}`, 'error');
+      showNotification(`Comparison failed: ${getErrorMessage(error)}`, 'error');
     } finally {
       loading = false;
     }

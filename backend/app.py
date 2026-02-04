@@ -1,16 +1,22 @@
 """
 WolfTrace Backend - Main API Server
 """
-from flask import Flask, request, jsonify, send_file, g
+from flask import Flask, request, jsonify, send_file, g, Response
 from flask_cors import CORS
 import os
 import json
 import zipfile
 import logging
 import time
+import traceback
+import uuid
 from io import BytesIO
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 from graph_engine import GraphEngine
+from database import DatabaseFactory, DatabaseType
+from migrations import MigrationManager
 from plugin_manager import PluginManager
 from pathlib import Path
 from graph_analytics import GraphAnalytics
@@ -21,8 +27,36 @@ from report_generator import ReportGenerator
 from bulk_operations import BulkOperations
 from graph_templates import GraphTemplates
 from history_manager import HistoryManager
+from advanced_search import AdvancedSearch
+from response_wrapper import ResponseWrapper
 from openapi_spec import generate_openapi_spec
 from logger_config import setup_logging, get_logger, log_performance
+from exceptions import (
+    WolfTraceException,
+    ValidationError,
+    NodeNotFoundError,
+    PluginNotFoundError,
+    SessionError,
+    ImportError as WolfImportError,
+    RequestTooLargeError
+)
+from validators import (
+    validate_node_id,
+    validate_node_ids,
+    validate_edge_spec,
+    validate_json_schema,
+    validate_request_size,
+    sanitize_properties,
+    IMPORT_SCHEMA,
+    IMPORT_AUTODETECT_SCHEMA,
+    PATHS_SCHEMA,
+    BULK_DELETE_NODES_SCHEMA,
+    BULK_DELETE_EDGES_SCHEMA,
+    BULK_UPDATE_NODES_SCHEMA,
+    SESSION_SAVE_SCHEMA,
+    QUERY_SCHEMA,
+    MAX_REQUEST_SIZE
+)
 
 load_dotenv()
 
@@ -39,8 +73,21 @@ CORS(app)
 # Request logging middleware
 @app.before_request
 def log_request_info():
-    """Log incoming requests"""
+    """Log incoming requests and validate request size"""
     g.start_time = time.time()
+    
+    # Validate request size
+    content_length = request.content_length
+    if content_length:
+        try:
+            validate_request_size(content_length, MAX_REQUEST_SIZE)
+        except RequestTooLargeError as e:
+            logger.warning(
+                f"Request too large: {content_length} bytes",
+                extra={'ip': request.remote_addr, 'path': request.path}
+            )
+            return jsonify(e.to_dict()), 413
+    
     logger.debug(
         f"Incoming request: {request.method} {request.path}",
         extra={
@@ -81,20 +128,99 @@ def log_response_info(response):
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    """Global exception handler with logging"""
+    """Global exception handler with detailed logging"""
+    # Handle WolfTrace custom exceptions
+    if isinstance(e, WolfTraceException):
+        logger.warning(
+            f"WolfTrace exception: {e.error_code} - {e.message}",
+            extra={
+                'error_code': e.error_code,
+                'path': request.path,
+                'method': request.method,
+                'ip': request.remote_addr,
+                'details': e.details
+            }
+        )
+        # Determine appropriate status code
+        status_code = 400
+        if isinstance(e, NodeNotFoundError):
+            status_code = 404
+        elif isinstance(e, PluginNotFoundError):
+            status_code = 404
+        elif isinstance(e, SessionError) and 'not found' in e.message.lower():
+            status_code = 404
+        elif isinstance(e, RequestTooLargeError):
+            status_code = 413
+        
+        return jsonify(e.to_dict()), status_code
+    
+    # Handle other exceptions with full stack trace
     logger.error(
         f"Unhandled exception: {str(e)}",
         extra={
             'path': request.path,
             'method': request.method,
-            'ip': request.remote_addr
+            'ip': request.remote_addr,
+            'exception_type': type(e).__name__,
+            'traceback': traceback.format_exc()
         },
         exc_info=True
     )
-    return jsonify({"error": "Internal server error"}), 500
+    
+    # Return generic error in production
+    return jsonify({
+        "error": "Internal server error",
+        "error_code": "INTERNAL_ERROR",
+        "message": str(e) if app.debug else "An unexpected error occurred"
+    }), 500
 
-# Initialize components
+# Initialize persistence backend
+db_backend = None
+migration_manager = None
+
+# Configure database backend from environment
+db_backend_type = os.getenv('DB_BACKEND', 'memory').lower()
+db_uri = os.getenv('DB_URI', 'neo4j://127.0.0.1:7687')
+db_user = os.getenv('DB_USERNAME', 'neo4j')
+db_password = os.getenv('DB_PASSWORD', 'lunalynx')
+db_pool_size = int(os.getenv('DB_POOL_SIZE', '10'))
+db_max_conn_lifetime = int(os.getenv('DB_MAX_CONN_LIFETIME', '3600'))
+db_acquire_timeout = int(os.getenv('DB_ACQUIRE_TIMEOUT', '30'))
+db_max_retry_time = int(os.getenv('DB_MAX_RETRY_TIME', '15'))
+
+# Initialize graph engine
 graph_engine = GraphEngine()
+
+if db_backend_type == 'neo4j':
+    try:
+        db_backend = DatabaseFactory.create_backend(
+            DatabaseType.NEO4J,
+            uri=db_uri,
+            username=db_user,
+            password=db_password,
+            pool_size=db_pool_size,
+            max_conn_lifetime=db_max_conn_lifetime,
+            acquire_timeout=db_acquire_timeout,
+            max_retry_time=db_max_retry_time
+        )
+        db_backend.connect()
+        migration_manager = MigrationManager(db_backend=db_backend)
+        applied = migration_manager.apply_all_pending()
+        if applied:
+            logger.info(f"Applied migrations: {applied}")
+        graph_engine.set_backend(db_backend)
+        sync_stats = graph_engine.sync_from_backend()
+        logger.info(
+            f"Synced graph from Neo4j at startup (nodes={sync_stats['nodes']}, edges={sync_stats['edges']})"
+        )
+    except Exception as e:
+        logger.error(f"Neo4j connection failed, falling back to in-memory backend: {str(e)}")
+        db_backend = DatabaseFactory.create_backend(DatabaseType.IN_MEMORY, graph_engine=graph_engine)
+        db_backend.connect()
+else:
+    db_backend = DatabaseFactory.create_backend(DatabaseType.IN_MEMORY, graph_engine=graph_engine)
+    db_backend.connect()
+
 # Plugins are now in backend/plugins directory
 plugins_path = str((Path(__file__).resolve().parent / 'plugins').resolve())
 plugin_manager = PluginManager(plugins_dir=plugins_path)
@@ -103,9 +229,30 @@ session_manager = SessionManager()
 query_builder = QueryBuilder(graph_engine)
 graph_comparison = GraphComparison(graph_engine)
 report_generator = ReportGenerator(graph_engine, analytics)
-bulk_operations = BulkOperations(graph_engine)
+bulk_operations = BulkOperations(graph_engine, db_backend)
 graph_templates = GraphTemplates()
 history_manager = HistoryManager()
+advanced_search = AdvancedSearch(graph_engine)
+
+# Background task executor for heavy operations (e.g., long path searches)
+task_executor = ThreadPoolExecutor(max_workers=4)
+task_registry = {}
+
+# Helper function to restore graph state (eliminates code duplication)
+def _restore_graph_from_state(state: Dict):
+    """
+    Restore graph engine from saved state
+    
+    Args:
+        state: Dictionary with 'nodes' and 'edges' keys
+    """
+    graph_engine.clear()
+    for node in state.get('nodes', []):
+        graph_engine.add_node(node['id'], node.get('type', 'Entity'), node)
+    for edge in state.get('edges', []):
+        source = edge.get('source')
+        target = edge.get('target')
+        graph_engine.add_edge(source, target, edge.get('type', 'RELATED_TO'), edge)
 
 @app.route('/api', methods=['GET'])
 def api_root():
@@ -144,93 +291,199 @@ def health():
 @app.route('/api/nodes', methods=['GET'])
 def get_nodes():
     """Get all nodes in the graph"""
-    node_type = request.args.get('type', None)
-    nodes = graph_engine.get_nodes(node_type)
-    return jsonify(nodes)
+    try:
+        node_type = request.args.get('type', None)
+        limit = int(request.args.get('limit', 100))
+        cursor = request.args.get('cursor')
+        limit = max(1, min(limit, 1000))
+        result = graph_engine.get_nodes_paginated(node_type=node_type, limit=limit, cursor=cursor)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error getting nodes: {str(e)}", exc_info=True)
+        raise
 
 @app.route('/api/edges', methods=['GET'])
 def get_edges():
     """Get all edges in the graph"""
-    edge_type = request.args.get('type', None)
-    edges = graph_engine.get_edges(edge_type)
-    return jsonify(edges)
+    try:
+        edge_type = request.args.get('type', None)
+        limit = int(request.args.get('limit', 200))
+        cursor = request.args.get('cursor')
+        limit = max(1, min(limit, 2000))
+        result = graph_engine.get_edges_paginated(edge_type=edge_type, limit=limit, cursor=cursor)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error getting edges: {str(e)}", exc_info=True)
+        raise
 
 @app.route('/api/graph', methods=['GET'])
 def get_graph():
     """Get full graph data"""
-    graph_data = graph_engine.get_full_graph()
-    return jsonify(graph_data)
+    try:
+        graph_data = graph_engine.get_full_graph()
+        return jsonify(graph_data)
+    except Exception as e:
+        logger.error(f"Error getting graph: {str(e)}", exc_info=True)
+        raise
 
 @app.route('/api/paths', methods=['POST'])
 def find_paths():
-    """Find paths between nodes"""
-    data = request.json
-    source = data.get('source')
-    target = data.get('target')
-    max_depth = data.get('max_depth', 5)
-    
-    if not source or not target:
-        return jsonify({"error": "Missing source or target"}), 400
-    
-    paths = graph_engine.find_paths(source, target, max_depth)
-    return jsonify(paths)
+    """Find paths between nodes with validation"""
+    try:
+        data = request.json
+        if not data:
+            raise ValidationError("Request body is required")
+        
+        # Validate schema
+        validate_json_schema(data, PATHS_SCHEMA)
+        
+        source = data.get('source')
+        target = data.get('target')
+        max_depth = data.get('max_depth', 5)
+        max_paths = data.get('max_paths', 100)
+        run_async = str(request.args.get('async', 'false')).lower() == 'true'
+        
+        # Validate node IDs
+        validate_node_id(source)
+        validate_node_id(target)
+        
+        # Check if nodes exist
+        if source not in graph_engine.graph:
+            raise NodeNotFoundError(source)
+        if target not in graph_engine.graph:
+            raise NodeNotFoundError(target)
+        
+        if run_async:
+            task_id = f"task_{uuid.uuid4().hex}"
+            future = task_executor.submit(graph_engine.find_paths, source, target, max_depth, max_paths)
+            task_registry[task_id] = future
+            return jsonify({"task_id": task_id, "status": "running"}), 202
+        paths = graph_engine.find_paths(source, target, max_depth, max_paths)
+        return jsonify(paths)
+    except (ValidationError, NodeNotFoundError) as e:
+        raise
+    except Exception as e:
+        logger.error(f"Error finding paths: {str(e)}", exc_info=True)
+        raise
 
 @app.route('/api/plugins', methods=['GET'])
 def list_plugins():
     """List available plugins"""
-    plugins = plugin_manager.list_plugins()
-    return jsonify(plugins)
+    try:
+        plugins = plugin_manager.list_plugins()
+        return jsonify(plugins)
+    except Exception as e:
+        logger.error(f"Error listing plugins: {str(e)}", exc_info=True)
+        raise
 
 @app.route('/api/import', methods=['POST'])
 @log_performance("import_data")
 def import_data():
-    """Import data via plugin"""
-    data = request.json
-    collector = data.get('collector')
-    import_data = data.get('data')
-    
-    if not collector:
-        logger.warning("Import request missing collector name")
-        return jsonify({"error": "Collector name required"}), 400
-    
-    if not import_data:
-        logger.warning("Import request missing data")
-        return jsonify({"error": "Data required"}), 400
-    
+    """Import data via plugin with validation"""
     try:
+        data = request.json
+        if not data:
+            raise ValidationError("Request body is required")
+        
+        # Validate schema
+        validate_json_schema(data, IMPORT_SCHEMA)
+        
+        collector = data.get('collector')
+        import_data = data.get('data')
+        
+        # Sanitize properties if data is a dict
+        if isinstance(import_data, dict):
+            import_data = sanitize_properties(import_data)
+        
         logger.info(f"Importing data with plugin: {collector}")
+        
+        # Check if plugin exists
+        if collector not in plugin_manager.plugins:
+            raise PluginNotFoundError(collector)
+        
         result = plugin_manager.process_data(collector, import_data, graph_engine)
         nodes_added = result.get('nodes_added', 0)
         edges_added = result.get('edges_added', 0)
         logger.info(f"Import successful: {nodes_added} nodes, {edges_added} edges added")
         history_manager.save_state(graph_engine.get_full_graph(), f"Import data via {collector}")
         return jsonify(result)
+    except (ValidationError, PluginNotFoundError) as e:
+        raise
     except Exception as e:
-        logger.error(f"Import failed with plugin {collector}: {str(e)}", exc_info=True)
-        return jsonify({"error": str(e)}), 400
+        logger.error(f"Import failed: {str(e)}", exc_info=True)
+        raise WolfImportError(f"Import operation failed: {str(e)}")
+
+# Helper function to return standardized error responses
+def _error_response(message: str, error_code: str = "INVALID_REQUEST", status_code: int = 400, details: Dict = None):
+    """
+    Return standardized error response in JSON format
+    
+    Args:
+        message: Error message
+        error_code: Error code identifier
+        status_code: HTTP status code
+        details: Optional additional error details
+        
+    Returns:
+        Tuple of (response dict, status code)
+    """
+    error_response = {
+        'error': True,
+        'error_code': error_code,
+        'message': message
+    }
+    if details:
+        error_response['details'] = details
+    return jsonify(error_response), status_code
 
 def _merge_json_objects(acc, obj):
     """
-    Merge two JSON-like Python objects (dicts). Lists are concatenated,
-    dicts are merged recursively, scalars override.
+    Merge two JSON-like Python objects (dicts). 
+    
+    Strategy:
+    - Lists are concatenated
+    - Dicts are merged recursively
+    - Scalars are overridden
+    - None values are replaced with the other value
+    
+    Args:
+        acc: Accumulator object (can be None)
+        obj: Object to merge into accumulator
+        
+    Returns:
+        Merged object
     """
+    # Handle None cases
     if acc is None:
         return obj
+    if obj is None:
+        return acc
+    
+    # Both are dicts - merge recursively
     if isinstance(acc, dict) and isinstance(obj, dict):
-        out = dict(acc)
-        for k, v in obj.items():
-            if k in out:
-                if isinstance(out[k], list) and isinstance(v, list):
-                    out[k] = out[k] + v
-                elif isinstance(out[k], dict) and isinstance(v, dict):
-                    out[k] = _merge_json_objects(out[k], v)
+        result = dict(acc)
+        for key, value in obj.items():
+            if key in result:
+                # Key exists in both - decide merge strategy based on types
+                if isinstance(result[key], list) and isinstance(value, list):
+                    # Both lists - concatenate
+                    result[key] = result[key] + value
+                elif isinstance(result[key], dict) and isinstance(value, dict):
+                    # Both dicts - recurse
+                    result[key] = _merge_json_objects(result[key], value)
                 else:
-                    out[k] = v
+                    # Different types or scalars - override
+                    result[key] = value
             else:
-                out[k] = v
-        return out
+                # Key only in obj - add it
+                result[key] = value
+        return result
+    
+    # Both are lists - concatenate
     if isinstance(acc, list) and isinstance(obj, list):
         return acc + obj
+    
+    # Default: obj overrides acc
     return obj
 
 @app.route('/api/import-zip', methods=['POST'])
@@ -243,9 +496,9 @@ def import_zip():
     file = request.files.get('file')
 
     if not collector:
-        return jsonify({"error": "Collector name required"}), 400
+        return _error_response('Collector name required', error_code='MISSING_COLLECTOR_NAME', status_code=400)
     if not file:
-        return jsonify({"error": "ZIP file required (multipart/form-data with 'file')"}), 400
+        return _error_response('ZIP file required (multipart/form-data with file)', error_code='MISSING_FILE', status_code=400)
 
     try:
         merged = None
@@ -272,44 +525,55 @@ def import_zip():
                             # skip invalid JSON entries
                             continue
         if merged is None:
-            return jsonify({"error": "No valid JSON files found in archive"}), 400
+            return _error_response('No valid JSON files found in archive', error_code='NO_JSON_FILES', status_code=400)
 
         result = plugin_manager.process_data(collector, merged, graph_engine)
         history_manager.save_state(graph_engine.get_full_graph(), f"Import ZIP via {collector}")
         return jsonify(result)
     except zipfile.BadZipFile:
-        return jsonify({"error": "Invalid ZIP file"}), 400
+        return _error_response('Invalid ZIP file', error_code='INVALID_ZIP', status_code=400)
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        return _error_response(str(e), error_code='IMPORT_ERROR', status_code=400)
 
 @app.route('/api/import-autodetect', methods=['POST'])
 @log_performance("import_autodetect")
 def import_autodetect():
-    """Import data with automatic plugin detection"""
+    """Import data with automatic plugin detection and validation"""
     try:
         data = request.json
         if not data:
-            logger.error("Import autodetect: No JSON data received")
-            return jsonify({"error": "No data received"}), 400
+            raise ValidationError("Request body is required")
+        
+        # Validate schema
+        validate_json_schema(data, IMPORT_AUTODETECT_SCHEMA)
         
         import_data = data.get('data')
         
-        if not import_data:
-            logger.error("Import autodetect: No 'data' field in request")
-            return jsonify({"error": "Data required"}), 400
+        # Sanitize properties if data is a dict
+        if isinstance(import_data, dict):
+            import_data = sanitize_properties(import_data)
         
         data_keys = list(import_data.keys())[:10] if isinstance(import_data, dict) else 'non-dict'
         logger.info(f"Import autodetect: Analyzing data structure (keys: {data_keys})")
         
-        # Detect which plugin can handle this data
-        detected_plugin = plugin_manager.detect_plugin(import_data)
+        # When payload clearly has a graph (nodes + edges), use web plugin so we get the full graph
+        nlist = import_data.get('nodes') if isinstance(import_data.get('nodes'), list) else []
+        elist = import_data.get('edges') if isinstance(import_data.get('edges'), list) else []
+        if len(nlist) > 0 and len(elist) > 0 and 'web' in plugin_manager.plugins:
+            detected_plugin = 'web'
+            logger.info("Import autodetect: Using web plugin for graph (nodes + edges present)")
+        else:
+            detected_plugin = plugin_manager.detect_plugin(import_data)
         
         if not detected_plugin:
             logger.warning(
                 "Import autodetect: Could not detect plugin for data format",
                 extra={'data_keys': data_keys if isinstance(data_keys, list) else str(data_keys)}
             )
-            return jsonify({"error": "Could not detect appropriate plugin for this data format"}), 400
+            raise WolfImportError(
+                "Could not detect appropriate plugin for this data format",
+                details={'available_plugins': list(plugin_manager.plugins.keys())}
+            )
         
         logger.info(f"Import autodetect: Detected plugin '{detected_plugin}' for data")
         
@@ -418,11 +682,41 @@ def import_zip_autodetect():
             logger.error("Import ZIP autodetect: No valid JSON files found in archive")
             return jsonify({"error": "No valid JSON files found in archive"}), 400
 
+        # Promote nested nodes/edges to top level so the web plugin sees the full graph
+        # (e.g. ZIP with graph.json {nodes, edges} or nodes.json/edges.json as separate files)
+        if 'nodes' not in merged or 'edges' not in merged:
+            for _key, val in merged.items():
+                if isinstance(val, dict) and 'nodes' in val and 'edges' in val:
+                    nlist, elist = val.get('nodes'), val.get('edges')
+                    if isinstance(nlist, list) and isinstance(elist, list) and len(nlist) > 0:
+                        merged.setdefault('nodes', nlist)
+                        merged.setdefault('edges', elist)
+                        break
+        # If we have separate nodes.json and edges.json they're already merged["nodes"] and merged["edges"]
+        # Ensure we keep the largest graph if multiple keys had nodes/edges (e.g. metadata merged one node)
+        if 'nodes' in merged and 'edges' in merged:
+            nlist = merged['nodes'] if isinstance(merged['nodes'], list) else []
+            elist = merged['edges'] if isinstance(merged['edges'], list) else []
+            for _key, val in merged.items():
+                if isinstance(val, dict) and 'nodes' in val and 'edges' in val:
+                    vn, ve = val.get('nodes'), val.get('edges')
+                    if isinstance(vn, list) and isinstance(ve, list) and len(vn) > len(nlist):
+                        nlist, elist = vn, ve
+            merged['nodes'] = nlist
+            merged['edges'] = elist
+
         merged_keys = list(merged.keys())[:20]
         logger.debug(f"Import ZIP autodetect: Merged data structure (keys: {merged_keys})")
         
-        # Detect which plugin can handle this data
-        detected_plugin = plugin_manager.detect_plugin(merged)
+        # When ZIP clearly contains a graph (nodes + edges), use web plugin so we get the full graph.
+        # Otherwise compliance can be chosen (e.g. due to metadata "tool") and only one "Agent" node is added.
+        nlist = merged.get('nodes') if isinstance(merged.get('nodes'), list) else []
+        elist = merged.get('edges') if isinstance(merged.get('edges'), list) else []
+        if len(nlist) > 0 and len(elist) > 0 and 'web' in plugin_manager.plugins:
+            detected_plugin = 'web'
+            logger.info("Import ZIP autodetect: Using web plugin for graph (nodes + edges present)")
+        else:
+            detected_plugin = plugin_manager.detect_plugin(merged)
         
         if not detected_plugin:
             logger.warning(
@@ -544,8 +838,41 @@ def get_neighbors():
 def export_graph():
     """Export graph data as JSON"""
     format_type = request.args.get('format', 'json')
+    stream = request.args.get('stream', 'false').lower() == 'true'
+    page_size = int(request.args.get('page_size', 1000))
+    page_size = max(100, min(page_size, 5000))
     
     if format_type == 'json':
+        if stream:
+            def generate():
+                yield '{"nodes":['
+                first = True
+                cursor = None
+                while True:
+                    page = graph_engine.get_nodes_paginated(limit=page_size, cursor=cursor)
+                    for item in page['items']:
+                        if not first:
+                            yield ','
+                        yield json.dumps(item)
+                        first = False
+                    cursor = page.get('next_cursor')
+                    if not cursor:
+                        break
+                yield '],"edges":['
+                first_edge = True
+                cursor = None
+                while True:
+                    page = graph_engine.get_edges_paginated(limit=page_size, cursor=cursor)
+                    for item in page['items']:
+                        if not first_edge:
+                            yield ','
+                        yield json.dumps(item)
+                        first_edge = False
+                    cursor = page.get('next_cursor')
+                    if not cursor:
+                        break
+                yield ']}'
+            return Response(generate(), mimetype='application/json')
         graph_data = graph_engine.get_full_graph()
         return jsonify(graph_data)
     else:
@@ -554,80 +881,140 @@ def export_graph():
 @app.route('/api/sessions', methods=['GET'])
 def list_sessions():
     """List all saved sessions"""
-    limit = int(request.args.get('limit', 50))
-    sessions = session_manager.list_sessions(limit)
-    return jsonify(sessions)
+    try:
+        limit = int(request.args.get('limit', 50))
+        sessions = session_manager.list_sessions(filters=None, limit=limit)
+        return jsonify(sessions)
+    except ValueError:
+        raise ValidationError("Invalid limit parameter", field="limit")
+    except Exception as e:
+        logger.error(f"Error listing sessions: {str(e)}", exc_info=True)
+        raise
 
 @app.route('/api/sessions', methods=['POST'])
 def save_session():
-    """Save current graph as a session"""
-    data = request.json
-    session_name = data.get('name', 'Untitled Session')
-    metadata = data.get('metadata', {})
-    
-    graph_data = graph_engine.get_full_graph()
-    session = session_manager.save_session(session_name, graph_data, metadata)
-    return jsonify(session)
+    """Save current graph as a session with validation"""
+    try:
+        data = request.json
+        if not data:
+            raise ValidationError("Request body is required")
+        
+        # Validate schema
+        validate_json_schema(data, SESSION_SAVE_SCHEMA)
+        
+        session_name = data.get('name', 'Untitled Session')
+        metadata = data.get('metadata', {})
+        
+        # Sanitize metadata
+        if metadata:
+            metadata = sanitize_properties(metadata)
+        
+        graph_data = graph_engine.get_full_graph()
+        logger.info(f"Saving session: {session_name}")
+        session = session_manager.save_session(session_name, graph_data, metadata)
+        return jsonify(session)
+    except ValidationError as e:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving session: {str(e)}", exc_info=True)
+        raise SessionError(f"Failed to save session: {str(e)}")
 
 @app.route('/api/sessions/<session_id>', methods=['GET'])
 def load_session(session_id):
-    """Load a saved session"""
+    """Load a saved session with validation"""
     try:
+        # Basic validation of session_id
+        if not session_id or len(session_id) > 200:
+            raise ValidationError("Invalid session ID", field="session_id")
+        
         session_data = session_manager.load_session(session_id)
         return jsonify(session_data)
     except FileNotFoundError:
-        return jsonify({"error": "Session not found"}), 404
+        raise SessionError(f"Session not found", session_id=session_id)
+    except Exception as e:
+        logger.error(f"Error loading session {session_id}: {str(e)}", exc_info=True)
+        raise
 
 @app.route('/api/sessions/<session_id>', methods=['DELETE'])
 def delete_session(session_id):
-    """Delete a session"""
-    if session_manager.delete_session(session_id):
-        return jsonify({"status": "deleted"})
-    return jsonify({"error": "Session not found"}), 404
+    """Delete a session with validation"""
+    try:
+        # Basic validation of session_id
+        if not session_id or len(session_id) > 200:
+            raise ValidationError("Invalid session ID", field="session_id")
+        
+        if session_manager.delete_session(session_id):
+            logger.info(f"Deleted session: {session_id}")
+            return jsonify({"status": "deleted"})
+        raise SessionError("Session not found", session_id=session_id)
+    except SessionError as e:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting session {session_id}: {str(e)}", exc_info=True)
+        raise
 
 @app.route('/api/sessions/<session_id>/restore', methods=['POST'])
 def restore_session(session_id):
-    """Restore a session to the current graph"""
+    """Restore a session to the current graph with validation"""
     try:
+        # Basic validation of session_id
+        if not session_id or len(session_id) > 200:
+            raise ValidationError("Invalid session ID", field="session_id")
+        
         session_data = session_manager.load_session(session_id)
         
-        # Clear current graph
-        graph_engine.clear()
-        
-        # Import session graph
-        graph = session_data.get('graph', {})
-        nodes = graph.get('nodes', [])
-        edges = graph.get('edges', [])
-        
-        # Rebuild graph
-        for node in nodes:
-            graph_engine.add_node(node['id'], node.get('type', 'Entity'), node)
-        
-        for edge in edges:
-            graph_engine.add_edge(
-                edge.get('source') or edge.get('source_id'),
-                edge.get('target') or edge.get('target_id'),
-                edge.get('type', 'RELATED_TO'),
-                edge
-            )
+        # Restore graph from saved session
+        _restore_graph_from_state(session_data.get('graph', {}))
         
         return jsonify({"status": "restored", "session": session_data['name']})
     except FileNotFoundError:
-        return jsonify({"error": "Session not found"}), 404
+        raise SessionError("Session not found", session_id=session_id)
+    except (ValidationError, SessionError) as e:
+        raise
+    except Exception as e:
+        logger.error(f"Error restoring session {session_id}: {str(e)}", exc_info=True)
+        raise SessionError(f"Failed to restore session: {str(e)}", session_id=session_id)
 
 @app.route('/api/query', methods=['POST'])
 def query_graph():
-    """Advanced query with filters"""
-    filters = request.json or {}
-    result = query_builder.build_query(filters)
-    return jsonify(result)
+    """Advanced query with filters and validation"""
+    try:
+        filters = request.json
+        if not filters:
+            filters = {}
+        
+        # Validate query schema
+        if filters:
+            validate_json_schema(filters, QUERY_SCHEMA)
+        
+        logger.debug(f"Executing query with filters: {filters}")
+        result = query_builder.build_query(filters)
+        return jsonify(result)
+    except ValidationError as e:
+        raise
+    except Exception as e:
+        logger.error(f"Query execution failed: {str(e)}", exc_info=True)
+        raise
 
 @app.route('/api/query/stats', methods=['POST'])
 def query_stats():
-    """Get statistics for a query"""
-    filters = request.json or {}
-    stats = query_builder.get_statistics_for_query(filters)
-    return jsonify(stats)
+    """Get statistics for a query with validation"""
+    try:
+        filters = request.json
+        if not filters:
+            filters = {}
+        
+        # Validate query schema
+        if filters:
+            validate_json_schema(filters, QUERY_SCHEMA)
+        
+        stats = query_builder.get_statistics_for_query(filters)
+        return jsonify(stats)
+    except ValidationError as e:
+        raise
+    except Exception as e:
+        logger.error(f"Query stats failed: {str(e)}", exc_info=True)
+        raise
 
 @app.route('/api/graph/paginated', methods=['GET'])
 def get_paginated_graph():
@@ -710,69 +1097,278 @@ def generate_report():
 # Bulk operations endpoints
 @app.route('/api/bulk/nodes/delete', methods=['POST'])
 def bulk_delete_nodes():
-    """Delete multiple nodes"""
-    data = request.json
-    node_ids = data.get('node_ids', [])
-    
-    if not node_ids:
-        return jsonify({"error": "node_ids array is required"}), 400
-    
-    result = bulk_operations.bulk_delete_nodes(node_ids)
-    history_manager.save_state(graph_engine.get_full_graph(), f"Bulk delete {len(node_ids)} nodes")
-    return jsonify(result)
+    """Delete multiple nodes with validation"""
+    try:
+        data = request.json
+        if not data:
+            raise ValidationError("Request body is required")
+        
+        # Validate schema
+        validate_json_schema(data, BULK_DELETE_NODES_SCHEMA)
+        
+        node_ids = data.get('node_ids', [])
+        
+        # Validate all node IDs
+        validate_node_ids(node_ids)
+        
+        logger.info(f"Bulk deleting {len(node_ids)} nodes")
+        result = bulk_operations.bulk_delete_nodes(node_ids)
+        history_manager.save_state(graph_engine.get_full_graph(), f"Bulk delete {len(node_ids)} nodes")
+        return jsonify(result)
+    except ValidationError as e:
+        raise
+    except Exception as e:
+        logger.error(f"Bulk delete nodes failed: {str(e)}", exc_info=True)
+        raise
 
 @app.route('/api/bulk/edges/delete', methods=['POST'])
 def bulk_delete_edges():
-    """Delete multiple edges"""
-    data = request.json
-    edge_specs = data.get('edges', [])
-    
-    if not edge_specs:
-        return jsonify({"error": "edges array is required"}), 400
-    
-    result = bulk_operations.bulk_delete_edges(edge_specs)
-    history_manager.save_state(graph_engine.get_full_graph(), f"Bulk delete {len(edge_specs)} edges")
-    return jsonify(result)
+    """Delete multiple edges with validation"""
+    try:
+        data = request.json
+        if not data:
+            raise ValidationError("Request body is required")
+        
+        # Validate schema
+        validate_json_schema(data, BULK_DELETE_EDGES_SCHEMA)
+        
+        edge_specs = data.get('edges', [])
+        
+        # Validate each edge specification
+        for edge_spec in edge_specs:
+            validate_edge_spec(edge_spec)
+        
+        logger.info(f"Bulk deleting {len(edge_specs)} edges")
+        result = bulk_operations.bulk_delete_edges(edge_specs)
+        history_manager.save_state(graph_engine.get_full_graph(), f"Bulk delete {len(edge_specs)} edges")
+        return jsonify(result)
+    except ValidationError as e:
+        raise
+    except Exception as e:
+        logger.error(f"Bulk delete edges failed: {str(e)}", exc_info=True)
+        raise
 
 @app.route('/api/bulk/nodes/update', methods=['POST'])
 def bulk_update_nodes():
-    """Update multiple nodes"""
-    data = request.json
-    updates = data.get('updates', [])
-    
-    if not updates:
-        return jsonify({"error": "updates array is required"}), 400
-    
-    result = bulk_operations.bulk_update_nodes(updates)
-    history_manager.save_state(graph_engine.get_full_graph(), f"Bulk update {len(updates)} nodes")
-    return jsonify(result)
+    """Update multiple nodes with validation"""
+    try:
+        data = request.json
+        if not data:
+            raise ValidationError("Request body is required")
+        
+        # Validate schema
+        validate_json_schema(data, BULK_UPDATE_NODES_SCHEMA)
+        
+        updates = data.get('updates', [])
+        
+        # Validate and sanitize each update
+        for update in updates:
+            node_id = update.get('id')
+            validate_node_id(node_id)
+            if 'properties' in update:
+                update['properties'] = sanitize_properties(update['properties'])
+        
+        logger.info(f"Bulk updating {len(updates)} nodes")
+        result = bulk_operations.bulk_update_nodes(updates)
+        history_manager.save_state(graph_engine.get_full_graph(), f"Bulk update {len(updates)} nodes")
+        return jsonify(result)
+    except ValidationError as e:
+        raise
+    except Exception as e:
+        logger.error(f"Bulk update nodes failed: {str(e)}", exc_info=True)
+        raise
 
 @app.route('/api/bulk/nodes/tag', methods=['POST'])
 def bulk_tag_nodes():
-    """Tag multiple nodes"""
-    data = request.json
-    node_ids = data.get('node_ids', [])
-    tags = data.get('tags', [])
-    operation = data.get('operation', 'add')
-    
-    if not node_ids or not tags:
-        return jsonify({"error": "node_ids and tags are required"}), 400
-    
-    result = bulk_operations.bulk_tag_nodes(node_ids, tags, operation)
-    history_manager.save_state(graph_engine.get_full_graph(), f"Bulk tag {len(node_ids)} nodes")
-    return jsonify(result)
+    """Tag multiple nodes with validation"""
+    try:
+        data = request.json
+        if not data:
+            raise ValidationError("Request body is required")
+        
+        node_ids = data.get('node_ids', [])
+        tags = data.get('tags', [])
+        operation = data.get('operation', 'add')
+        
+        if not node_ids:
+            raise ValidationError("node_ids array is required", field="node_ids")
+        if not tags:
+            raise ValidationError("tags array is required", field="tags")
+        if operation not in ['add', 'remove']:
+            raise ValidationError("operation must be 'add' or 'remove'", field="operation")
+        
+        # Validate node IDs
+        validate_node_ids(node_ids)
+        
+        logger.info(f"Bulk tagging {len(node_ids)} nodes with {len(tags)} tags")
+        result = bulk_operations.bulk_tag_nodes(node_ids, tags, operation)
+        history_manager.save_state(graph_engine.get_full_graph(), f"Bulk tag {len(node_ids)} nodes")
+        return jsonify(result)
+    except ValidationError as e:
+        raise
+    except Exception as e:
+        logger.error(f"Bulk tag nodes failed: {str(e)}", exc_info=True)
+        raise
 
 @app.route('/api/bulk/nodes/export', methods=['POST'])
 def bulk_export_nodes():
-    """Export multiple nodes"""
-    data = request.json
-    node_ids = data.get('node_ids', [])
-    
-    if not node_ids:
-        return jsonify({"error": "node_ids array is required"}), 400
-    
-    nodes = bulk_operations.bulk_export_nodes(node_ids)
-    return jsonify(nodes)
+    """Export multiple nodes with validation"""
+    try:
+        data = request.json
+        if not data:
+            raise ValidationError("Request body is required")
+        
+        node_ids = data.get('node_ids', [])
+        
+        if not node_ids:
+            raise ValidationError("node_ids array is required", field="node_ids")
+        
+        # Validate node IDs
+        validate_node_ids(node_ids)
+        
+        nodes = bulk_operations.bulk_export_nodes(node_ids)
+        return jsonify(nodes)
+    except ValidationError as e:
+        raise
+    except Exception as e:
+        logger.error(f"Bulk export nodes failed: {str(e)}", exc_info=True)
+        raise
+
+@app.route('/api/bulk/nodes/create', methods=['POST'])
+def bulk_create_nodes():
+    """Create multiple nodes in bulk"""
+    try:
+        data = request.json
+        if not data:
+            raise ValidationError("Request body is required")
+        
+        nodes = data.get('nodes', [])
+        if not nodes:
+            raise ValidationError("nodes array is required", field="nodes")
+        
+        logger.info(f"Bulk creating {len(nodes)} nodes")
+        result = bulk_operations.bulk_create_nodes(nodes)
+        if result.get('errors'):
+            return jsonify(result), 207  # 207 Multi-Status for partial success
+        history_manager.save_state(graph_engine.get_full_graph(), f"Bulk create {len(nodes)} nodes")
+        return jsonify(result), 201
+    except ValidationError as e:
+        raise
+    except Exception as e:
+        logger.error(f"Bulk create nodes failed: {str(e)}", exc_info=True)
+        raise
+
+@app.route('/api/bulk/edges/create', methods=['POST'])
+def bulk_create_edges():
+    """Create multiple edges in bulk"""
+    try:
+        data = request.json
+        if not data:
+            raise ValidationError("Request body is required")
+        
+        edges = data.get('edges', [])
+        if not edges:
+            raise ValidationError("edges array is required", field="edges")
+        
+        logger.info(f"Bulk creating {len(edges)} edges")
+        result = bulk_operations.bulk_create_edges(edges)
+        if result.get('errors'):
+            return jsonify(result), 207  # 207 Multi-Status for partial success
+        history_manager.save_state(graph_engine.get_full_graph(), f"Bulk create {len(edges)} edges")
+        return jsonify(result), 201
+    except ValidationError as e:
+        raise
+    except Exception as e:
+        logger.error(f"Bulk create edges failed: {str(e)}", exc_info=True)
+        raise
+
+@app.route('/api/bulk/rollback', methods=['POST'])
+def rollback_transaction():
+    """Rollback the last bulk operation"""
+    try:
+        result = bulk_operations.rollback_transaction()
+        history_manager.save_state(graph_engine.get_full_graph(), f"Rollback transaction ({result['rolled_back']} operations)")
+        return jsonify(result), 200
+    except Exception as e:
+        logger.error(f"Rollback failed: {str(e)}", exc_info=True)
+        raise
+
+# Advanced search endpoints
+@app.route('/api/search/regex', methods=['GET'])
+def search_regex():
+    """Search nodes using regex pattern"""
+    try:
+        pattern = request.args.get('pattern', '')
+        node_type = request.args.get('type')
+        
+        if not pattern:
+            raise ValidationError("pattern parameter is required", field="pattern")
+        
+        results = advanced_search.search_regex(pattern, node_type)
+        return jsonify(results)
+    except ValidationError as e:
+        raise
+    except Exception as e:
+        logger.error(f"Regex search failed: {str(e)}", exc_info=True)
+        raise
+
+@app.route('/api/search/fuzzy', methods=['GET'])
+def search_fuzzy():
+    """Search nodes using fuzzy matching"""
+    try:
+        query = request.args.get('query', '')
+        node_type = request.args.get('type')
+        threshold = float(request.args.get('threshold', 0.6))
+        limit = int(request.args.get('limit', 50))
+        
+        if not query:
+            raise ValidationError("query parameter is required", field="query")
+        if not (0 <= threshold <= 1):
+            raise ValidationError("threshold must be between 0 and 1", field="threshold")
+        
+        results = advanced_search.search_fuzzy(query, node_type, threshold, limit)
+        return jsonify(results)
+    except ValidationError as e:
+        raise
+    except Exception as e:
+        logger.error(f"Fuzzy search failed: {str(e)}", exc_info=True)
+        raise
+
+@app.route('/api/search/full-text', methods=['GET'])
+def search_full_text():
+    """Full-text search across all node properties"""
+    try:
+        query = request.args.get('query', '')
+        node_type = request.args.get('type')
+        case_sensitive = request.args.get('case_sensitive', 'false').lower() == 'true'
+        limit = int(request.args.get('limit', 50))
+        
+        if not query:
+            raise ValidationError("query parameter is required", field="query")
+        
+        results = advanced_search.search_full_text(query, node_type, case_sensitive, limit)
+        return jsonify(results)
+    except ValidationError as e:
+        raise
+    except Exception as e:
+        logger.error(f"Full-text search failed: {str(e)}", exc_info=True)
+        raise
+
+@app.route('/api/search/advanced', methods=['POST'])
+def search_advanced():
+    """Advanced search with complex filters"""
+    try:
+        filters = request.json
+        if not filters:
+            raise ValidationError("Request body with filter specification is required")
+        
+        results = advanced_search.search_complex_filter(filters)
+        return jsonify(results)
+    except ValidationError as e:
+        raise
+    except Exception as e:
+        logger.error(f"Advanced search failed: {str(e)}", exc_info=True)
+        raise
 
 # Graph templates endpoints
 @app.route('/api/templates', methods=['GET'])
@@ -809,6 +1405,20 @@ def apply_template(template_id):
     history_manager.save_state(graph_engine.get_full_graph(), f"Applied template: {template_id}")
     return jsonify(result)
 
+@app.route('/api/tasks/<task_id>', methods=['GET'])
+def get_task_status(task_id):
+    """Check background task status"""
+    future = task_registry.get(task_id)
+    if not future:
+        return jsonify({"error": "Task not found"}), 404
+    if future.done():
+        try:
+            result = future.result()
+            return jsonify({"status": "completed", "result": result})
+        except Exception as e:
+            return jsonify({"status": "failed", "error": str(e)}), 500
+    return jsonify({"status": "running"})
+
 # History/Undo-Redo endpoints
 @app.route('/api/history/undo', methods=['POST'])
 def undo():
@@ -817,14 +1427,8 @@ def undo():
     if not previous_state:
         return jsonify({"error": "Nothing to undo"}), 400
     
-    # Restore graph state
-    graph_engine.clear()
-    for node in previous_state.get('nodes', []):
-        graph_engine.add_node(node['id'], node.get('type', 'Entity'), node)
-    for edge in previous_state.get('edges', []):
-        source = edge.get('source') or edge.get('source_id')
-        target = edge.get('target') or edge.get('target_id')
-        graph_engine.add_edge(source, target, edge.get('type', 'RELATED_TO'), edge)
+    # Restore graph state from history
+    _restore_graph_from_state(previous_state)
     
     return jsonify({
         'status': 'undone',
@@ -839,14 +1443,8 @@ def redo():
     if not next_state:
         return jsonify({"error": "Nothing to redo"}), 400
     
-    # Restore graph state
-    graph_engine.clear()
-    for node in next_state.get('nodes', []):
-        graph_engine.add_node(node['id'], node.get('type', 'Entity'), node)
-    for edge in next_state.get('edges', []):
-        source = edge.get('source') or edge.get('source_id')
-        target = edge.get('target') or edge.get('target_id')
-        graph_engine.add_edge(source, target, edge.get('type', 'RELATED_TO'), edge)
+    # Restore graph state from redo history
+    _restore_graph_from_state(next_state)
     
     return jsonify({
         'status': 'redone',

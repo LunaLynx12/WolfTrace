@@ -8,6 +8,37 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Keys in merged ZIP data that are lists of node-like objects (id + properties) to merge into nodes
+_NODE_ENRICHMENT_KEYS = ('hosts', 'ports', 'endpoints', 'technologies', 'vulnerabilities', 'scans')
+
+
+def _enrich_nodes_from_zip_files(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Merge properties from type-specific files (hosts, ports, endpoints, etc.) into
+    data['nodes'] so each node has all fields from the ZIP for display in the GUI.
+    """
+    nodes = data.get('nodes')
+    if not isinstance(nodes, list) or len(nodes) == 0:
+        return data
+    node_by_id = {n.get('id'): n for n in nodes if n.get('id')}
+    for key in _NODE_ENRICHMENT_KEYS:
+        if key not in data or key == 'nodes':
+            continue
+        items = data[key]
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            nid = item.get('id')
+            if not nid or nid not in node_by_id:
+                continue
+            target = node_by_id[nid]
+            for k, v in item.items():
+                if k not in target:
+                    target[k] = v
+    return data
+
 
 def process(data: Any, graph_engine) -> Dict[str, Any]:
     """
@@ -26,14 +57,33 @@ def process(data: Any, graph_engine) -> Dict[str, Any]:
     """
     nodes_added = 0
     edges_added = 0
-    
+
     if not isinstance(data, dict):
         return {
             'nodes_added': 0,
             'edges_added': 0,
             'error': 'Web data must be a dictionary'
         }
-    
+
+    # Prefer full graph when present (ZIP with nodes.json + edges.json and summary.json
+    # would otherwise only run process_summary and add a single node)
+    if 'nodes' in data and 'edges' in data:
+        nodes_list = data.get('nodes')
+        edges_list = data.get('edges')
+        if (isinstance(nodes_list, list) and isinstance(edges_list, list) and
+                len(nodes_list) > 0 and len(edges_list) > 0):
+            try:
+                # Enrich nodes with any extra fields from type-specific files in the ZIP
+                data = _enrich_nodes_from_zip_files(data)
+                result = process_network_topology(data, graph_engine)
+                return {
+                    'nodes_added': result.get('nodes_added', 0),
+                    'edges_added': result.get('edges_added', 0),
+                    'message': result.get('message', f'Processed {result.get("nodes_added", 0)} nodes and {result.get("edges_added", 0)} edges')
+                }
+            except Exception as e:
+                logger.error(f"Error processing network topology: {str(e)}", exc_info=True)
+
     # Check if this is a merged format with multiple tool results
     tool_processors = {
         'rustscan': process_rustscan,
@@ -100,8 +150,9 @@ def process(data: Any, graph_engine) -> Dict[str, Any]:
                 logger.error(f"Error processing HTTPX format: {str(e)}", exc_info=True)
         
         elif 'nodes' in data and 'edges' in data:
-            # Network topology format
+            # Network topology format (enrich nodes from hosts/ports/endpoints etc. in ZIP)
             try:
+                data = _enrich_nodes_from_zip_files(data)
                 result = process_network_topology(data, graph_engine)
                 nodes_added += result.get('nodes_added', 0)
                 edges_added += result.get('edges_added', 0)

@@ -3,6 +3,7 @@
   import axios from 'axios';
   import Button from './ui/Button.svelte';
   import { showNotification } from '../utils/notifications.js';
+  import { getErrorMessage } from '../utils/api.js';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -45,7 +46,7 @@
       }
     } catch (error) {
       if (error.response?.status !== 400) {
-        showNotification(`Undo failed: ${error.response?.data?.error || error.message}`, 'error');
+        showNotification(`Undo failed: ${getErrorMessage(error)}`, 'error');
       }
     } finally {
       loading = false;
@@ -62,7 +63,7 @@
       }
     } catch (error) {
       if (error.response?.status !== 400) {
-        showNotification(`Redo failed: ${error.response?.data?.error || error.message}`, 'error');
+        showNotification(`Redo failed: ${getErrorMessage(error)}`, 'error');
       }
     } finally {
       loading = false;

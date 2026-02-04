@@ -339,6 +339,22 @@ html, body {
   word-break: break-word;
 }
 
+.node-detail-row .node-detail-value {
+  word-break: break-word;
+}
+
+.cve-link {
+  color: var(--accent, #58a6ff);
+  text-decoration: none;
+}
+.cve-link:hover {
+  text-decoration: underline;
+}
+.cve-link:focus {
+  outline: 1px solid var(--accent, #58a6ff);
+  outline-offset: 2px;
+}
+
 .graph-container {
   flex: 1;
   position: relative;

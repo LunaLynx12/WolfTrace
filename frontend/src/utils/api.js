@@ -43,6 +43,31 @@ apiClient.interceptors.response.use(
   }
 );
 
+/**
+ * Extract error message from API response or error object
+ * Handles both new error format {error, error_code, message, details}
+ * and legacy format {error: "message"}
+ * 
+ * @param {Error} error - The error object from axios
+ * @returns {string} - Formatted error message
+ */
+function getErrorMessage(error) {
+  // Handle new structured error format
+  if (error.response?.data?.error_code) {
+    return error.response.data.message || error.response.data.error_code;
+  }
+  
+  // Handle legacy error format
+  if (error.response?.data?.error) {
+    return typeof error.response.data.error === 'string' 
+      ? error.response.data.error 
+      : error.response.data.message || 'Unknown error';
+  }
+  
+  // Fallback to error message
+  return error.message || 'An error occurred';
+}
+
 export default apiClient;
-export { API_BASE };
+export { API_BASE, getErrorMessage };
 

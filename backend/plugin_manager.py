@@ -28,6 +28,13 @@ class PluginDetector:
             self._test_engine = GraphEngine()
         return self._test_engine
     
+    def cleanup(self):
+        """Cleanup resources to prevent memory leaks"""
+        if self._test_engine is not None:
+            self._test_engine.clear()
+            self._test_engine = None
+        self._nested_key_cache.clear()
+    
     def _has_nested_key_cached(self, data: Any, key: str, max_depth: int = 3, cache_key: str = None) -> bool:
         """Recursively check if a key exists in nested dict structure (with caching)"""
         if cache_key and cache_key in self._nested_key_cache:
@@ -221,22 +228,27 @@ class PluginDetector:
         
         test_engine = self._get_test_engine()
         
-        # Try plugins in order (prioritize specific ones first)
-        priority_order = ['compliance', 'web', 'iam']
-        
-        # First try priority plugins
-        for plugin_name in priority_order:
-            if plugin_name in self.plugins:
-                if self._test_plugin(plugin_name, data, test_engine):
-                    return plugin_name
-        
-        # Then try remaining plugins
-        for plugin_name, plugin in self.plugins.items():
-            if plugin_name not in priority_order:
-                if self._test_plugin(plugin_name, data, test_engine):
-                    return plugin_name
-        
-        return None
+        try:
+            # Try plugins in order (prioritize specific ones first)
+            priority_order = ['compliance', 'web', 'iam']
+            
+            # First try priority plugins
+            for plugin_name in priority_order:
+                if plugin_name in self.plugins:
+                    if self._test_plugin(plugin_name, data, test_engine):
+                        return plugin_name
+            
+            # Then try remaining plugins
+            for plugin_name, plugin in self.plugins.items():
+                if plugin_name not in priority_order:
+                    if self._test_plugin(plugin_name, data, test_engine):
+                        return plugin_name
+            
+            return None
+        finally:
+            # Clean up test engine state to prevent test pollution
+            if test_engine is not None:
+                test_engine.clear()
     
     def _test_plugin(self, plugin_name: str, data: Any, test_engine) -> bool:
         """Test if a plugin can handle the data"""

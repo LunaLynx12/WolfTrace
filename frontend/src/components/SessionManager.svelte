@@ -3,6 +3,7 @@
   import axios from 'axios';
   import Button from './ui/Button.svelte';
   import { showNotification } from '../utils/notifications.js';
+  import { getErrorMessage } from '../utils/api.js';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -62,7 +63,7 @@
       sessionDescription = '';
       loadSessions();
     } catch (error) {
-      showNotification(`Failed to save session: ${error.response?.data?.error || error.message}`, 'error');
+      showNotification(`Failed to save session: ${getErrorMessage(error)}`, 'error');
     } finally {
       loading = false;
     }
@@ -70,11 +71,11 @@
 
   async function loadSession(sessionId) {
     try {
-      const response = await axios.get(`${API_BASE}/sessions/${sessionId}/restore`);
+      const response = await axios.post(`${API_BASE}/sessions/${sessionId}/restore`);
       if (onLoadSession) onLoadSession();
       showNotification('Session loaded', 'success');
     } catch (error) {
-      showNotification(`Failed to load session: ${error.message}`, 'error');
+      showNotification(`Failed to load session: ${getErrorMessage(error)}`, 'error');
     }
   }
 
@@ -85,7 +86,7 @@
       showNotification('Session deleted', 'success');
       loadSessions();
     } catch (error) {
-      showNotification(`Failed to delete session: ${error.message}`, 'error');
+      showNotification(`Failed to delete session: ${getErrorMessage(error)}`, 'error');
     }
   }
 </script>

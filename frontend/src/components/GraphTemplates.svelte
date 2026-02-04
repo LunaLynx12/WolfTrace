@@ -3,6 +3,7 @@
   import axios from 'axios';
   import Button from './ui/Button.svelte';
   import { showNotification } from '../utils/notifications.js';
+  import { getErrorMessage } from '../utils/api.js';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -69,7 +70,7 @@
       if (onTemplateApplied) onTemplateApplied();
       variables = {};
     } catch (error) {
-      showNotification(`Failed to apply template: ${error.response?.data?.error || error.message}`, 'error');
+      showNotification(`Failed to apply template: ${getErrorMessage(error)}`, 'error');
     } finally {
       loading = false;
     }

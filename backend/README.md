@@ -613,7 +613,14 @@ diff_graph = comparison.create_diff_graph(diff)
 
 ### Environment Variables
 
-Create a `.env` file in the backend directory:
+Copy the example file and edit as needed:
+
+```bash
+cp .env.example .env
+# Edit .env and set at least DB_PASSWORD if using Neo4j.
+```
+
+Example `.env` contents:
 
 ```bash
 # Server Configuration
@@ -622,6 +629,26 @@ PORT=5000
 # Logging
 LOG_LEVEL=INFO
 ```
+
+### Using Neo4j (neo4j://127.0.0.1:7687)
+
+To persist the graph in Neo4j instead of in-memory:
+
+1. **Run Neo4j** (Docker example):
+   ```bash
+   docker run -d --name neo4j -p 7474:7474 -p 7687:7687 \
+     -e NEO4J_AUTH=neo4j/your_password neo4j:latest
+   ```
+
+2. **Configure the backend** in `.env`:
+   ```bash
+   DB_BACKEND=neo4j
+   DB_URI=neo4j://127.0.0.1:7687
+   DB_USERNAME=neo4j
+   DB_PASSWORD=your_password
+   ```
+
+3. **Start the backend** (`python app.py`). On startup it will connect to Neo4j, run any pending migrations, and sync the in-memory graph from Neo4j. All imports and edits will be written through to Neo4j.
 
 ### Configuration Schema
 

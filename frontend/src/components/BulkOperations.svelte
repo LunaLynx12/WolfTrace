@@ -2,6 +2,7 @@
   import axios from 'axios';
   import Button from './ui/Button.svelte';
   import { showNotification } from '../utils/notifications.js';
+  import { getErrorMessage } from '../utils/api.js';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -30,7 +31,7 @@
       showNotification(`Successfully deleted ${selectedNodes.length} nodes`, 'success');
       if (onOperationComplete) onOperationComplete();
     } catch (error) {
-      showNotification(`Failed: ${error.response?.data?.error || error.message}`, 'error');
+      showNotification(`Failed: ${getErrorMessage(error)}`, 'error');
     } finally {
       loading = false;
     }
@@ -57,7 +58,7 @@
       showNotification(`Tagged ${selectedNodes.length} nodes`, 'success');
       if (onOperationComplete) onOperationComplete();
     } catch (error) {
-      showNotification(`Failed: ${error.response?.data?.error || error.message}`, 'error');
+      showNotification(`Failed: ${getErrorMessage(error)}`, 'error');
     } finally {
       loading = false;
     }

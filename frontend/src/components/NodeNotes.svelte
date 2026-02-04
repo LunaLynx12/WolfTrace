@@ -1,6 +1,8 @@
 <script>
   import { onMount } from 'svelte';
   import axios from 'axios';
+  import { showNotification } from '../utils/notifications.js';
+  import { getErrorMessage } from '../utils/api.js';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -78,7 +80,7 @@
       if (onNoteUpdate) onNoteUpdate(node.id, updatedNotes);
       showNotification('Note saved', 'success');
     } catch (error) {
-      showNotification(`Failed to save note: ${error.message}`, 'error');
+      showNotification(`Failed to save note: ${getErrorMessage(error)}`, 'error');
     } finally {
       saving = false;
     }
@@ -104,7 +106,7 @@
       if (onNoteUpdate) onNoteUpdate(node.id, updatedNotes);
       showNotification('Note deleted', 'success');
     } catch (error) {
-      showNotification(`Failed to delete note: ${error.message}`, 'error');
+      showNotification(`Failed to delete note: ${getErrorMessage(error)}`, 'error');
     }
   }
 </script>

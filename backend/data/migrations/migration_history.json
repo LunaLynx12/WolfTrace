@@ -1,0 +1,10 @@
+{
+  "applied_migrations": [
+    {
+      "version": "001",
+      "description": "Initial schema with node type indexing",
+      "applied_at": "2026-02-04T14:20:40.580520"
+    }
+  ],
+  "last_updated": "2026-02-04T14:20:40.580520"
+}

@@ -1057,9 +1057,48 @@
     }, 500); // Longer delay to ensure any user interactions are complete
   }
 
+  /** Get full node from graph data so all properties from the ZIP/API are shown in details/popup */
+  function getFullNode(node) {
+    if (!node?.id) return node;
+    const nodes = graphData?.nodes;
+    if (nodes && Array.isArray(nodes)) {
+      const full = nodes.find((n) => n.id === node.id);
+      if (full) return full;
+    }
+    return node;
+  }
+
+  /** Display text: show :// instead of ___ so URLs/IDs are readable */
+  function formatDisplayText(val) {
+    if (val == null) return '';
+    return String(val).replace(/___/g, '://');
+  }
+
+  /** NVD CVE link base */
+  const CVE_NVD_URL = 'https://nvd.nist.gov/vuln/detail/';
+  const CVE_REGEX = /CVE-\d{4}-\d+/g;
+
+  /** Split a string into segments: plain text (with ___ → ://) and CVE links for rendering */
+  function getDisplaySegments(val) {
+    if (val == null) return [{ text: '', link: null }];
+    const s = String(val).replace(/___/g, '://');
+    const parts = [];
+    let lastIndex = 0;
+    let match;
+    CVE_REGEX.lastIndex = 0;
+    while ((match = CVE_REGEX.exec(s)) !== null) {
+      if (match.index > lastIndex) parts.push({ text: s.slice(lastIndex, match.index), link: null });
+      parts.push({ text: match[0], link: CVE_NVD_URL + match[0] });
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < s.length) parts.push({ text: s.slice(lastIndex), link: null });
+    return parts.length ? parts : [{ text: s, link: null }];
+  }
+
   function handleNodeClick(node, event) {
-    selectedNode = node;
-    popupNode = node; // Show popup on click
+    const fullNode = getFullNode(node);
+    selectedNode = fullNode;
+    popupNode = fullNode; // Show popup with full node so all ZIP/API props display
     
     if (event?.ctrlKey || event?.metaKey) {
       if (selectedNodes.includes(node.id)) {
@@ -1120,8 +1159,9 @@
   }
 
   function handleNodeSearch(node) {
-    selectedNode = node;
-    const graphNode = graphData.nodes.find(n => n.id === node.id);
+    const fullNode = graphData?.nodes?.find((n) => n.id === node.id) || node;
+    selectedNode = fullNode;
+    const graphNode = graphData?.nodes?.find(n => n.id === node.id);
     if (graphNode) {
       // Use the improved recenter function
       recenterToNode(graphNode, 1.8); // Slightly higher zoom for search results
@@ -1876,11 +1916,24 @@
             </div>
           </div>
           <div class="node-details">
-            <p><strong>ID:</strong> {selectedNode.id}</p>
+            <p><strong>ID:</strong> {formatDisplayText(selectedNode.id)}</p>
             <p><strong>Type:</strong> {selectedNode.type}</p>
             {#each Object.entries(selectedNode).filter(([key]) => !['id', 'type', 'notes', '_notes'].includes(key)) as [key, value]}
-              <p>
-                <strong>{key}:</strong> {JSON.stringify(value)}
+              <p class="node-detail-row">
+                <strong>{key}:</strong>
+                {#if typeof value === 'object' && value !== null}
+                  <span class="node-detail-value">{JSON.stringify(value)}</span>
+                {:else}
+                  <span class="node-detail-value">
+                    {#each getDisplaySegments(value) as segment}
+                      {#if segment.link}
+                        <a href={segment.link} target="_blank" rel="noopener noreferrer" class="cve-link">{segment.text}</a>
+                      {:else}
+                        {segment.text}
+                      {/if}
+                    {/each}
+                  </span>
+                {/if}
               </p>
             {/each}
           </div>
@@ -2004,7 +2057,7 @@
         <div class="node-popup" on:click|stopPropagation>
           <div class="popup-header">
             <div class="popup-title">
-              <strong>{popupNode.id || 'Unknown'}</strong>
+              <strong>{formatDisplayText(popupNode.id || 'Unknown')}</strong>
               {#if popupNode.type}
                 <span class="popup-type">{popupNode.type}</span>
               {/if}
@@ -2024,7 +2077,19 @@
                       {#if value.length > 0}
                         <div class="popup-array">
                           {#each value as item}
-                            <div class="popup-array-item">{typeof item === 'object' ? JSON.stringify(item, null, 2) : String(item)}</div>
+                            <div class="popup-array-item">
+                              {#if typeof item === 'object'}
+                                {JSON.stringify(item, null, 2)}
+                              {:else}
+                                {#each getDisplaySegments(item) as segment}
+                                  {#if segment.link}
+                                    <a href={segment.link} target="_blank" rel="noopener noreferrer" class="cve-link">{segment.text}</a>
+                                  {:else}
+                                    {segment.text}
+                                  {/if}
+                                {/each}
+                              {/if}
+                            </div>
                           {/each}
                         </div>
                       {/if}
@@ -2033,13 +2098,31 @@
                         {#each Object.entries(value) as [subKey, subValue]}
                           <div class="popup-nested">
                             <span class="popup-key">{subKey}:</span>
-                            <span class="popup-value">{typeof subValue === 'object' ? JSON.stringify(subValue, null, 2) : String(subValue)}</span>
+                            <span class="popup-value">
+                              {#if typeof subValue === 'object'}
+                                {JSON.stringify(subValue, null, 2)}
+                              {:else}
+                                {#each getDisplaySegments(subValue) as segment}
+                                  {#if segment.link}
+                                    <a href={segment.link} target="_blank" rel="noopener noreferrer" class="cve-link">{segment.text}</a>
+                                  {:else}
+                                    {segment.text}
+                                  {/if}
+                                {/each}
+                              {/if}
+                            </span>
                           </div>
                         {/each}
                       </div>
                     {/if}
                   {:else}
-                    {String(value)}
+                    {#each getDisplaySegments(value) as segment}
+                      {#if segment.link}
+                        <a href={segment.link} target="_blank" rel="noopener noreferrer" class="cve-link">{segment.text}</a>
+                      {:else}
+                        {segment.text}
+                      {/if}
+                    {/each}
                   {/if}
                 </span>
               </div>

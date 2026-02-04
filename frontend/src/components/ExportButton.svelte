@@ -3,6 +3,7 @@
   import * as d3 from 'd3';
   import Button from './ui/Button.svelte';
   import { showNotification } from '../utils/notifications.js';
+  import { getErrorMessage } from '../utils/api.js';
 
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -38,7 +39,7 @@
         exportAsSVG();
       }
     } catch (error) {
-      showNotification(`Export failed: ${error.message}`, 'error');
+      showNotification(`Export failed: ${getErrorMessage(error)}`, 'error');
     }
   }
 
@@ -66,7 +67,7 @@
         showNotification('PNG exported successfully', 'success');
       }, 'image/png');
     } catch (error) {
-      showNotification(`PNG export failed: ${error.message}`, 'error');
+        showNotification(`PNG export failed: ${getErrorMessage(error)}`, 'error');
     }
   }
 
@@ -258,7 +259,7 @@
         showNotification('SVG exported successfully', 'success');
       }
     } catch (error) {
-      showNotification(`SVG export failed: ${error.message}`, 'error');
+        showNotification(`SVG export failed: ${getErrorMessage(error)}`, 'error');
     }
   }
 </script>
