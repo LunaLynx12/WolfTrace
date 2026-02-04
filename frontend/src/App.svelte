@@ -18,6 +18,9 @@
   import Button from './components/ui/Button.svelte';
   import TabButton from './components/ui/TabButton.svelte';
   import NodeNotes from './components/NodeNotes.svelte';
+  import Minimap from './components/Minimap.svelte';
+  import HeatmapOverlay from './components/HeatmapOverlay.svelte';
+  import IconLegend from './components/IconLegend.svelte';
   import { cacheManager } from './utils/cache.js';
   import { showNotification as showNotif } from './utils/notifications.js';
   import * as d3 from 'd3';
@@ -57,6 +60,175 @@
   let lastRecenterTime = 0; // Track last recenter to prevent rapid calls
   let resizeObserver = null;
   let menuOpen = false;
+  /** Focus mode: show only center node + N-hop neighbors. null = off. */
+  let focusMode = null;
+
+  /** Heatmap overlay: color nodes by metric */
+  let heatmapEnabled = false;
+  let heatmapMetric = 'degree'; // 'degree' | 'betweenness' | 'risk_score' | 'path_count_high_value'
+  let heatmapValues = new Map(); // node id -> number
+  let heatmapRange = { min: 0, max: 1 };
+  let heatmapCacheHash = '';
+
+  // Node icon legend: track which types are present in the current graph
+  let legendNodeTypes = [];
+
+  function enterFocusMode(centerNodeId, hops) {
+    focusMode = { centerNodeId, hops };
+    updateGraph();
+    if (graphInstance) {
+      setTimeout(() => {
+        if (graphInstance && focusMode) graphInstance.zoomToFit(400);
+      }, 100);
+    }
+  }
+
+  function resetFocusMode() {
+    focusMode = null;
+    updateGraph();
+  }
+
+  /** Interpolate color: vivid cyan (low) -> yellow -> red (high). t in [0,1]. */
+  function heatmapInterpolate(t) {
+    const clamp = (x) => Math.max(0, Math.min(1, x));
+    t = clamp(t);
+    let r, g, b;
+    if (t < 0.5) {
+      const s = t * 2;
+      r = Math.round(0 + 255 * s);
+      g = Math.round(188 + (235 - 188) * s);
+      b = Math.round(212 + (59 - 212) * s);
+    } else {
+      const s = (t - 0.5) * 2;
+      r = 255;
+      g = Math.round(235 + (68 - 235) * s);
+      b = Math.round(59 + (68 - 59) * s);
+    }
+    return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+  }
+
+  function computeHeatmapMetrics() {
+    const data = getFilteredGraphData();
+    const nodes = data?.nodes || [];
+    const links = data?.links || [];
+    const hash = `${nodes.length}-${links.length}-${heatmapMetric}`;
+    if (hash === heatmapCacheHash && heatmapValues.size > 0) return;
+    heatmapCacheHash = hash;
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+
+    const adj = new Map();
+    nodes.forEach((n) => adj.set(n.id, new Set()));
+    links.forEach((l) => {
+      const src = typeof l.source === 'object' ? l.source?.id : l.source;
+      const tgt = typeof l.target === 'object' ? l.target?.id : l.target;
+      if (nodeIds.has(src) && nodeIds.has(tgt)) {
+        adj.get(src).add(tgt);
+        adj.get(tgt).add(src);
+      }
+    });
+
+    const edgeSet = new Set(links.map((l) => {
+      const a = typeof l.source === 'object' ? l.source?.id : l.source;
+      const b = typeof l.target === 'object' ? l.target?.id : l.target;
+      return a < b ? `${a}\t${b}` : `${b}\t${a}`;
+    }));
+
+    const values = new Map();
+    let minV = Infinity;
+    let maxV = -Infinity;
+
+    if (heatmapMetric === 'degree') {
+      nodes.forEach((n) => {
+        const v = adj.get(n.id)?.size ?? 0;
+        values.set(n.id, v);
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
+      });
+    } else if (heatmapMetric === 'betweenness') {
+      nodes.forEach((n) => {
+        const neighbors = [...(adj.get(n.id) || [])];
+        let v = 0;
+        for (let i = 0; i < neighbors.length; i++) {
+          for (let j = i + 1; j < neighbors.length; j++) {
+            const key = neighbors[i] < neighbors[j] ? `${neighbors[i]}\t${neighbors[j]}` : `${neighbors[j]}\t${neighbors[i]}`;
+            if (!edgeSet.has(key)) v += 1;
+          }
+        }
+        values.set(n.id, v);
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
+      });
+    } else if (heatmapMetric === 'risk_score') {
+      nodes.forEach((n) => {
+        let v = 0;
+        if (typeof n.risk_score === 'number') v = n.risk_score;
+        else if (typeof n.riskScore === 'number') v = n.riskScore;
+        else if (n.cves && Array.isArray(n.cves)) v = n.cves.length;
+        else if (n.cve_count != null) v = Number(n.cve_count) || 0;
+        else if (n.vulnerabilities && Array.isArray(n.vulnerabilities)) v = n.vulnerabilities.length;
+        values.set(n.id, v);
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
+      });
+    } else if (heatmapMetric === 'path_count_high_value') {
+      const isHighValue = (n) => {
+        if (!n) return false;
+        if (n.highValue === true || n.high_value === true) return true;
+        const t = (n.type || '').toLowerCase();
+        if (t === 'host' || t === 'endpoint' || t === 'server') return true;
+        if (n.cves?.length || n.vulnerabilities?.length) return true;
+        return false;
+      };
+      const highValueIds = new Set(nodes.filter((n) => isHighValue(n)).map((n) => n.id));
+      nodes.forEach((n) => {
+        const visited = new Set([n.id]);
+        let front = new Set([n.id]);
+        let count = 0;
+        for (let hop = 0; hop <= 3 && front.size > 0; hop++) {
+          const next = new Set();
+          for (const id of front) {
+            if (highValueIds.has(id)) count += 1;
+            for (const nb of adj.get(id) || []) {
+              if (!visited.has(nb)) {
+                visited.add(nb);
+                next.add(nb);
+              }
+            }
+          }
+          front = next;
+        }
+        values.set(n.id, count);
+        if (count < minV) minV = count;
+        if (count > maxV) maxV = count;
+      });
+    }
+
+    if (minV === Infinity) minV = 0;
+    if (maxV === -Infinity) maxV = 1;
+    if (minV === maxV) maxV = minV + 1;
+    heatmapValues = values;
+    heatmapRange = { min: minV, max: maxV };
+  }
+
+  function getHeatmapColor(node) {
+    if (!heatmapEnabled || !node?.id) return null;
+    const v = heatmapValues.get(node.id);
+    const t = v == null ? 0 : (heatmapRange.max === heatmapRange.min ? 0 : (v - heatmapRange.min) / (heatmapRange.max - heatmapRange.min));
+    return heatmapInterpolate(t);
+  }
+
+  // Update legend node types whenever graph data changes
+  $: if (graphData?.nodes && graphData.nodes.length > 0) {
+    const typeSet = new Set();
+    graphData.nodes.forEach(n => {
+      const t = n.type || 'default';
+      typeSet.add(t);
+    });
+    legendNodeTypes = Array.from(typeSet).sort((a, b) => a.localeCompare(b));
+  } else {
+    legendNodeTypes = [];
+  }
 
   let initialLoaded = false;
   let showCachedGraphDialog = false;
@@ -113,7 +285,7 @@
     ['url', '\uf0c1'],            // fa-link
     ['location', '\uf3c5'],       // fa-location-dot
     ['geo', '\uf3c5'],            // fa-location-dot
-    ['organization', '\uf1ad'],  // fa-building
+    ['organization', '\uf1ad'],   // fa-building
     ['org', '\uf1ad'],            // fa-building
     ['service', '\uf233'],        // fa-server
     ['port', '\uf1e6'],           // fa-plug
@@ -125,6 +297,10 @@
     ['ns', '\uf1c0'],             // fa-database
     ['entity', '\uf007'],         // fa-user
     ['user', '\uf007'],           // fa-user
+    ['cve', '\uf188'],            // fa-bug
+    ['vulnerability', '\uf188'],
+    ['vuln', '\uf188'],
+    ['finding', '\uf188'],
     ['default', '\uf111']         // fa-circle
   ]);
   
@@ -354,11 +530,66 @@
     }, 150); // Debounce: wait 150ms after resize stops
   }
 
+  /** Get neighbor nodes of current selection from the displayed graph; optionally pick one by arrow direction. */
+  function getNeighborsForWalk() {
+    if (!selectedNode?.id || !graphInstance) return [];
+    const g = graphInstance.graphData();
+    const nodes = g?.nodes || [];
+    const links = g?.links || [];
+    const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+    const current = nodeMap.get(selectedNode.id);
+    if (!current) return [];
+    const neighborIds = new Set();
+    for (const l of links) {
+      const src = typeof l.source === 'object' ? l.source?.id : l.source;
+      const tgt = typeof l.target === 'object' ? l.target?.id : l.target;
+      if (src === selectedNode.id && tgt) neighborIds.add(tgt);
+      if (tgt === selectedNode.id && src) neighborIds.add(src);
+    }
+    return [...neighborIds].map((id) => nodeMap.get(id)).filter(Boolean);
+  }
+
+  /** Pick neighbor in direction (ArrowUp/Down/Left/Right). Uses node positions; falls back to first neighbor. */
+  function pickNeighborInDirection(neighbors, direction) {
+    if (!selectedNode || neighbors.length === 0) return null;
+    const withPos = neighbors.filter((n) => n.x != null && n.y != null);
+    const use = withPos.length > 0 ? withPos : neighbors;
+    if (use.length === 0) return null;
+    if (use.length === 1) return use[0];
+    const keyX = (n) => n.x ?? 0;
+    const keyY = (n) => n.y ?? 0;
+    if (direction === 'ArrowUp') return use.reduce((a, b) => (keyY(a) < keyY(b) ? a : b));
+    if (direction === 'ArrowDown') return use.reduce((a, b) => (keyY(a) > keyY(b) ? a : b));
+    if (direction === 'ArrowLeft') return use.reduce((a, b) => (keyX(a) < keyX(b) ? a : b));
+    if (direction === 'ArrowRight') return use.reduce((a, b) => (keyX(a) > keyX(b) ? a : b));
+    return use[0];
+  }
+
+  function walkToNeighbor(direction) {
+    const neighbors = getNeighborsForWalk();
+    const next = pickNeighborInDirection(neighbors, direction);
+    if (!next) return;
+    const full = getFullNode(next);
+    selectedNode = full;
+    selectedNodes = [full.id];
+    recenterToNode(next, 1.5);
+  }
+
+  /** Return true if the active element is a text input (don't steal arrow/enter). */
+  function isTextInputFocused() {
+    if (typeof document === 'undefined') return false;
+    const el = document.activeElement;
+    if (!el) return false;
+    const tag = el.tagName && el.tagName.toUpperCase();
+    return tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable;
+  }
+
   function setupKeyboardShortcuts() {
     // Only set up in browser environment
     if (typeof window === 'undefined') return () => {};
     const handleKeyPress = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key === 's') {
         e.preventDefault();
       }
       if (e.key === 'Escape') {
@@ -368,28 +599,78 @@
           selectedNode = null;
           highlightedPath = null;
           selectedNodes = [];
+          focusMode = null;
+          updateGraph();
         }
+        return;
       }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+      if (mod && e.key === 'z' && !e.shiftKey) {
         e.preventDefault();
         handleUndo();
+        return;
       }
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+      if (mod && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
         e.preventDefault();
         handleRedo();
+        return;
       }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'c' && selectedNode) {
+      if (mod && e.key === 'c' && selectedNode) {
         e.preventDefault();
         copiedNode = selectedNode;
         showNotification('Node copied', 'success');
+        return;
       }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'v' && copiedNode) {
+      if (mod && e.key === 'v' && copiedNode) {
         e.preventDefault();
         handlePasteNode();
+        return;
       }
-      if (e.key === '?' && !e.ctrlKey && !e.metaKey) {
+      if (e.key === '?' && !mod) {
         e.preventDefault();
         showShortcuts = true;
+        return;
+      }
+      if (isTextInputFocused()) return;
+
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        if (selectedNode) {
+          e.preventDefault();
+          walkToNeighbor(e.key);
+        }
+        return;
+      }
+      if (e.key === 'Enter') {
+        if (selectedNode) {
+          e.preventDefault();
+          enterFocusMode(selectedNode.id, 2);
+        }
+        return;
+      }
+      if (e.key === 'f' || e.key === 'F') {
+        if (selectedNode && !mod) {
+          e.preventDefault();
+          enterFocusMode(selectedNode.id, 2);
+        }
+        return;
+      }
+      if (e.key === 'e' || e.key === 'E') {
+        if (selectedNode && !mod) {
+          e.preventDefault();
+          enterFocusMode(selectedNode.id, 1);
+        }
+        return;
+      }
+      if (e.key === 'p' || e.key === 'P') {
+        if (selectedNode && !mod) {
+          e.preventDefault();
+          sourceNode = selectedNode.id;
+          activeView = 'graph';
+          requestAnimationFrame(() => {
+            document.getElementById('path-target-input')?.focus();
+            showNotification('Enter target node ID and press Find Paths', 'info');
+          });
+        }
+        return;
       }
     };
     if (typeof window !== 'undefined') {
@@ -440,6 +721,7 @@
       selectedNode = null;
       selectedNodes = [];
       highlightedPath = null;
+      focusMode = null;
       // Performance: Invalidate layout cache
       cachedLayoutData = null;
       cachedLayoutHash = null;
@@ -477,6 +759,7 @@
     if (graphInstance) {
       graphInstance.graphData({ nodes: [], links: [] });
     }
+    focusMode = null;
     // Clear backend graph as well
     try {
       await axios.post(`${API_BASE}/clear`);
@@ -662,6 +945,7 @@
     cachedFilterHash = null;
     
     const data = getFilteredGraphData();
+    if (heatmapEnabled) computeHeatmapMetrics();
     
     // Bug fix: Clear link color cache and ID cache to prevent stale data
     if (data.links) {
@@ -905,6 +1189,7 @@
       selectedNodes = [];
       queryFilter = null;
       filteredNodes = null;
+      focusMode = null;
       
       // Clear cache
       try {
@@ -1003,6 +1288,7 @@
       cachedLayoutHash = null;
       pathResult = null;
       highlightedPath = null;
+      heatmapCacheHash = '';
       updateGraph();
       showNotification('Graph cleared', 'success');
     } catch (error) {
@@ -1206,6 +1492,15 @@
   }
 
   function nodeColor(node) {
+    // Heatmap overlay: color by metric when enabled
+    if (heatmapEnabled) {
+      const heatColor = getHeatmapColor(node);
+      if (heatColor) {
+        if (selectedNodesSet && selectedNodesSet.has(node.id)) return '#FFD700';
+        if (highlightedPathSet && highlightedPathSet.has(node.id)) return '#FFD700';
+        return heatColor;
+      }
+    }
     // Performance: Use Set for O(1) lookups instead of Array.includes() O(n)
     if (selectedNodesSet && selectedNodesSet.has(node.id)) return '#FFD700';
     if (highlightedPathSet && highlightedPathSet.has(node.id)) return '#FFD700';
@@ -1333,6 +1628,38 @@
     return 2;
   }
 
+  /** Returns Set of node ids within `hops` steps from `centerNodeId` (BFS on current nodes/links). */
+  function getNHopNeighborIds(nodes, links, centerNodeId, hops) {
+    const idToNode = new Map(nodes.map(n => [n.id, n]));
+    if (!idToNode.has(centerNodeId)) return new Set();
+    const adj = new Map();
+    for (const n of nodes) adj.set(n.id, new Set());
+    for (const l of links) {
+      const src = typeof l.source === 'string' ? l.source : l.source?.id;
+      const tgt = typeof l.target === 'string' ? l.target : l.target?.id;
+      if (src != null && tgt != null) {
+        adj.get(src)?.add(tgt);
+        adj.get(tgt)?.add(src);
+      }
+    }
+    const out = new Set([centerNodeId]);
+    let front = new Set([centerNodeId]);
+    for (let h = 0; h < hops; h++) {
+      const next = new Set();
+      for (const id of front) {
+        for (const nid of adj.get(id) || []) {
+          if (!out.has(nid)) {
+            out.add(nid);
+            next.add(nid);
+          }
+        }
+      }
+      front = next;
+      if (front.size === 0) break;
+    }
+    return out;
+  }
+
   function getFilteredGraphData() {
     // Performance: Create numeric hash instead of string template for better performance
     let hash = (queryFilter ? 1 : 0) * 1000000000;
@@ -1341,6 +1668,8 @@
     hash += (graphData.nodes?.length || 0) * 1000;
     hash += (graphData.links?.length || 0);
     hash += enabledNodeTypes.size * 100; // Include node type filter in hash
+    hash += (focusMode ? 1 : 0) * 10000000000;
+    if (focusMode) hash += (focusMode.centerNodeId || '').length * 10000 + (focusMode.hops || 0) * 100;
     // Add enabled types to hash
     const enabledTypesArray = [...enabledNodeTypes].sort();
     enabledTypesArray.forEach((type, idx) => {
@@ -1410,6 +1739,23 @@
         }
       }
       // Otherwise, show all nodes (default behavior - no filtering)
+    }
+    
+    // Focus mode: restrict to center node + N-hop neighbors
+    if (focusMode && result.nodes && result.nodes.length > 0) {
+      const centerId = focusMode.centerNodeId;
+      const hops = Math.max(1, Math.min(3, focusMode.hops || 2));
+      const neighborIds = getNHopNeighborIds(result.nodes, result.links || [], centerId, hops);
+      if (neighborIds.size > 0) {
+        result = {
+          nodes: result.nodes.filter(n => neighborIds.has(n.id)),
+          links: (result.links || []).filter(l => {
+            const src = typeof l.source === 'string' ? l.source : l.source?.id;
+            const tgt = typeof l.target === 'string' ? l.target : l.target?.id;
+            return neighborIds.has(src) && neighborIds.has(tgt);
+          })
+        };
+      }
     }
     
     // Performance: Cache the result
@@ -1824,15 +2170,17 @@
         />
       </div>
 
-      <div class="sidebar-section">
+      <div class="sidebar-section" id="path-finding-section">
         <h2>Path Finding</h2>
         <input
+          id="path-source-input"
           type="text"
           placeholder="Source Node ID"
           bind:value={sourceNode}
           class="input-field"
         />
         <input
+          id="path-target-input"
           type="text"
           placeholder="Target Node ID"
           bind:value={targetNode}
@@ -1937,6 +2285,47 @@
               </p>
             {/each}
           </div>
+          <div class="focus-mode-actions" style="margin-top: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;">
+            <span style="font-size: 12px; color: var(--text-2);">Focus:</span>
+            <Button
+              variant="secondary"
+              size="sm"
+              title="Show this node and 1-hop neighbors"
+              on:click={() => enterFocusMode(selectedNode.id, 1)}
+              fullWidth={false}
+            >
+              1 hop
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              title="Show this node and 2-hop neighbors"
+              on:click={() => enterFocusMode(selectedNode.id, 2)}
+              fullWidth={false}
+            >
+              2 hop
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              title="Show this node and 3-hop neighbors"
+              on:click={() => enterFocusMode(selectedNode.id, 3)}
+              fullWidth={false}
+            >
+              3 hop
+            </Button>
+            {#if focusMode}
+              <Button
+                variant="secondary"
+                size="sm"
+                title="Show full graph again"
+                on:click={resetFocusMode}
+                fullWidth={false}
+              >
+                Reset view
+              </Button>
+            {/if}
+          </div>
           <div style="margin-top: 15px;">
             <NodeNotes 
               node={selectedNode}
@@ -2022,6 +2411,17 @@
   <div class="graph-container" class:collapsed={graphCollapsed} class:fullscreen={graphFullscreen}>
     <div class="graph-inner" style="position: relative;">
       <div class="graph-toolbar">
+        {#if focusMode}
+          <Button
+            variant="secondary"
+            title="Show full graph again"
+            on:click={resetFocusMode}
+            style="padding: 6px 10px; font-size: 12px;"
+            fullWidth={false}
+          >
+            Reset view
+          </Button>
+        {/if}
         <Button
           variant="secondary"
           title={graphFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
@@ -2049,6 +2449,21 @@
           </div>
         {/if}
       </div>
+      {#if !graphCollapsed}
+        <HeatmapOverlay
+          enabled={heatmapEnabled}
+          metric={heatmapMetric}
+          range={heatmapRange}
+          onToggle={() => { heatmapEnabled = !heatmapEnabled; updateGraph(); }}
+          onMetricChange={(m) => { heatmapMetric = m; heatmapCacheHash = ''; updateGraph(); }}
+        />
+        <IconLegend nodeTypes={legendNodeTypes} />
+        <Minimap
+          graphInstance={graphInstance}
+          graphData={graphData}
+          graphContainer={graphContainer}
+        />
+      {/if}
     </div>
     
     <!-- Node Popup Modal -->
@@ -2065,6 +2480,15 @@
             <button class="popup-close" on:click={() => popupNode = null} title="Close (Esc)">
               ×
             </button>
+          </div>
+          <div class="popup-focus-actions">
+            <span class="popup-focus-label">Focus:</span>
+            <button type="button" class="popup-focus-btn" title="1-hop neighborhood" on:click={() => { enterFocusMode(popupNode.id, 1); popupNode = null; }}>1</button>
+            <button type="button" class="popup-focus-btn" title="2-hop neighborhood" on:click={() => { enterFocusMode(popupNode.id, 2); popupNode = null; }}>2</button>
+            <button type="button" class="popup-focus-btn" title="3-hop neighborhood" on:click={() => { enterFocusMode(popupNode.id, 3); popupNode = null; }}>3</button>
+            {#if focusMode}
+              <button type="button" class="popup-focus-btn reset" on:click={resetFocusMode}>Reset view</button>
+            {/if}
           </div>
           <div class="popup-body">
             {#each Object.entries(popupNode).filter(([key]) => !key.startsWith('__') && key !== 'id' && key !== 'type' && key !== 'x' && key !== 'y' && key !== 'vx' && key !== 'vy' && key !== 'fx' && key !== 'fy' && key !== 'level' && key !== 'layoutType') as [key, value]}

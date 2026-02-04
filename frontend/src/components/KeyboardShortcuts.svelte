@@ -8,11 +8,19 @@
     { keys: ['Ctrl', 'Y'], description: 'Redo last undone operation' },
     { keys: ['Ctrl', 'Shift', 'Z'], description: 'Redo (alternative)' },
     { keys: ['Ctrl', 'S'], description: 'Save session' },
-    { keys: ['Esc'], description: 'Clear selection and highlights' },
+    { keys: ['Esc'], description: 'Clear selection, focus mode, and highlights' },
     { keys: ['Ctrl', 'Click'], description: 'Multi-select nodes' },
     { keys: ['Click'], description: 'Select node / Center on node' },
     { keys: ['Scroll'], description: 'Zoom in/out' },
     { keys: ['Drag'], description: 'Pan graph' },
+    { keys: ['↑'], description: 'Walk to neighbor (up)' },
+    { keys: ['↓'], description: 'Walk to neighbor (down)' },
+    { keys: ['←'], description: 'Walk to neighbor (left)' },
+    { keys: ['→'], description: 'Walk to neighbor (right)' },
+    { keys: ['Enter'], description: 'Focus: show selected node + 2-hop neighbors' },
+    { keys: ['F'], description: 'Focus: show selected node + 2-hop neighbors' },
+    { keys: ['E'], description: 'Expand 1 hop: show selected node + 1-hop neighbors' },
+    { keys: ['P'], description: 'Paths to…: set source from selection, focus target input' },
   ];
 </script>
 
